@@ -1,7 +1,17 @@
 [![DOI](https://zenodo.org/badge/196273476.svg)](https://zenodo.org/badge/latestdoi/196273476)
 
-# Project-Symbiont-LiDAR
-Design files for a support and interface unit for the Garmin LiDAR Lite
+# Project-Apis
+Design files for a support and interface unit for the Garmin LiDAR Lite.
+
+## Namesake
+
+### Current: Apis
+
+![Rapid detector eyes](https://upload.wikimedia.org/wikipedia/commons/8/81/Bee_Collecting_Pollen_2004-08-14.jpg)
+
+With its internal guidance system and compound eyes, the honeybee can obtain orientation and range while seeing in slow motion. Those rapid eyes feel perfect for a laser, and though the bee doesn't have one – it senses distance through parallax instead – just imagine if it did.
+
+### Former: Symbiont-LiDAR
 
 ![Symbiosis](https://upload.wikimedia.org/wikipedia/commons/0/0d/Reindeer-Lichen_%286176257165%29.gif)
 
