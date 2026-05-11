@@ -43,6 +43,11 @@ bool AccelFail = false; //Used to indicate failure of on board accelerometer
 
 volatile uint8_t ADR = 0x50; //Use arbitraty address, change using generall call??
 // const uint8_t ADR_Alt = 0x41; //Alternative device address  //WARNING! When a #define is used instead, problems are caused
+// NOTE: Switching to 0x41 via a solder jumper requires a board revision to
+// add address-selection hardware; no such circuit exists in the current design
+// (JP1 is the MIC2544 current-limit jumper, not an address jumper).
+// Planned: EEPROM-stored address set via a writable firmware register,
+// taking effect on next boot. See github.com/NorthernWidget/Project-Apis.
 
 unsigned int Config = 0; //Global config value
 unsigned long Period = 100; //Number of ms between sample events for continuious running
@@ -83,6 +88,7 @@ void setup() {
   // Serial.println("begin"); //DEBUG!
   // pinMode(ADR_SEL_PIN, INPUT_PULLUP);
   // if(!digitalRead(ADR_SEL_PIN)) ADR = ADR_Alt; //If solder jumper is bridged, use alternate address //DEBUG!
+  // NOTE: ADR_SEL_PIN is not defined or wired in the current board revision.
   pinMode(STAT_LED, OUTPUT);
   digitalWrite(STAT_LED, HIGH);
   pinMode(POWER_SW, OUTPUT);
