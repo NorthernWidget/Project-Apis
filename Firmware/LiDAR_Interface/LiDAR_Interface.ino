@@ -1,10 +1,10 @@
-//Dyson_Driver_ShortWave.ino
 #include "SlowSoftI2CMaster.h"
 #include "WireS.h"
 #include <avr/sleep.h>
 #include <EEPROM.h>
 // #include <EEPROM.h> //DEBUG!
-//Commands
+
+// Commands
 #define CTRL_REG1_ADR 0x20
 #define CTRL_REG2_ADR 0x21
 #define CTRL_REG3_ADR 0x22
@@ -14,8 +14,8 @@
 #define OUT_Y_ADR 0x2A
 #define OUT_Z_ADR 0x2C
 
+// Pin definitions
 #define POWER_SW 2
-
 #define ACCEL_INT 7 //Interrupt from accelerometer, active low, needs internal pullup
 #define MODE_TRIGGER 13 //Trigger for pulse width mode
 #define MODE_READ 11 //Read pin for pulse width mode, also INTO
