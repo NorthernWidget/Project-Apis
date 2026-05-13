@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: Project-Apis
+message: "If you use this hardware, please cite it using the metadata from this file."
+type: software
+authors:
+  - family-names: Schulz
+    given-names: Bobby
+    orcid: "https://orcid.org/0000-0002-9272-4756"
+  - family-names: Wickert
+    given-names: Andrew
+    orcid: "https://orcid.org/0000-0002-9545-3365"
+repository-code: https://github.com/NorthernWidget/Project-Apis
+abstract: "Hardware design, firmware, and documentation for the Apis board, an interface
+  unit for the Garmin LiDAR Lite rangefinder. Apis manages power supply and sequencing,
+  firmware watchdog and reset, and I2C communication for the LiDAR Lite, and integrates
+  a MEMS accelerometer to report pitch and roll — useful when the sensor is not mounted
+  level."
+keywords:
+  - LiDAR
+  - rangefinder
+  - environmental monitoring
+  - open-source hardware
+  - accelerometer
+  - ATTiny
+  - Arduino
+license:
+  - CC-BY-SA-4.0
+  - GPL-3.0-only
+version: 0.1.0
+date-released: '2026-05-12'
+doi: 10.5281/zenodo.3766447

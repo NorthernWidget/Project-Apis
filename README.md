@@ -1,4 +1,4 @@
-[![DOI](https://zenodo.org/badge/196273476.svg)](https://zenodo.org/badge/latestdoi/196273476)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.3766447.svg)](https://doi.org/10.5281/zenodo.3766447)
 
 # Project-Apis
 Design files for a support and interface unit for the Garmin LiDAR Lite.
