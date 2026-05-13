@@ -54,13 +54,13 @@ Paul, J. D., Buytaert, W., & Sah, N.(2020). A technical evaluation of lidar-base
 * Status LED
 * Open-source licensing via CC BY-SA 4.0
 
-![Symbiont board](Documentation/images/SymbiontLiDAR_v010_top_annotated_20210408.png)
+![Apis board](Documentation/images/SymbiontLiDAR_v010_top_annotated_20210408.png)
 
 ### Electronic Software and Firmware
 
 * Programmable using the Arduino IDE https://www.arduino.cc/en/main/software
 * [Firmware](Firmware) available in this repository. At the time of writing, "LiDAR_InterfaceDemo" is the most up-to-date prototype firmware.
-* [Software ](https://github.com/NorthernWidget-Skunkworks/Symbiont-LiDAR_Library) to use the Symbiont-LiDAR with Arduino-compatible devices
+* [Software](https://github.com/NorthernWidget/Apis_Library) to use the Apis with Arduino-compatible devices
 * Open-source licensing via GNU GPL 3.0
 
 ## Assembly
@@ -85,7 +85,7 @@ Go to https://www.arduino.cc/en/main/software. Choose the proper IDE version for
 
 ### AVR ISP
 
-To install firmware on the Symbiont board, you use the [2x3-pin 6-pin ICSP (also called ISP) header](https://www.digikey.com/product-detail/en/3m/929665-09-03-I/3M156313-06-ND/681796) with a special device called an "in-circuit system programmer" (or just "in-system programmer; yup, that's what the acronym stands for).
+To install firmware on the Apis board, you use the [2x3-pin 6-pin ICSP (also called ISP) header](https://www.digikey.com/product-detail/en/3m/929665-09-03-I/3M156313-06-ND/681796) with a special device called an "in-circuit system programmer" (or just "in-system programmer; yup, that's what the acronym stands for).
 
 Many devices exist to upload firmware, including:
 * The official [AVR ISP mkII](http://ww1.microchip.com/downloads/en/DeviceDoc/Atmel-42093-AVR-ISP-mkII_UserGuide.pdf) (no longer produced but available used)
@@ -114,7 +114,7 @@ Using this ISP, upload (as of the time of writing): [the Arduino sketch in this 
 ***Note: Be sure to download and/or update drivers for your ISP.***
 
 
-## Writing a program to connect to the Symbiont-LiDAR
+## Writing a program to connect to the Apis
 
 Once it is bootloaded and connected with a LiDAR Lite sensor, you should be able to use any standard Arduino device to connect to it and read its data.
 
@@ -123,15 +123,14 @@ Once it is bootloaded and connected with a LiDAR Lite sensor, you should be able
 This code is intended for any generic Arduino system.
 
 ```c++
-// Include the Symbiont library
-#include "SymbiontLiDAR.h"
+#include "Apis.h"
 
 // Declare variables -- just as strings
 String header;
 String data;
 
 // Instantiate class
-SymbiontLiDAR myLaser;
+Apis myLaser;
 
 void setup(){
     // Begin Serial connection to computer at 38400 baud
@@ -157,9 +156,8 @@ void loop(){
 The [Margay data logger](github.com/NorthernWidget-Skunkworks/Project-Margay) is the lightweight and low-power open-source data-logging option from Northern Widget. It saves data to a local SD card and includes on-board status measurements and a low-drift real-time clock. We have written [a library to interface with the Margay](github.com/NorthernWidget-Skunkworks/Margay_Library), which can in turn be used to link the Margay with sensors.
 
 ```c++
-// Include the Symbiont library
 #include "Margay.h"
-#include "SymbiontLiDAR.h"
+#include "Apis.h"
 
 // Declare variables -- just as strings
 // Empty header to start; will include sensor labels and information
@@ -167,10 +165,10 @@ String header = "";
 String data;
 
 // Instantiate classes
-SymbiontLiDAR myLaser;
+Apis myLaser;
 Margay Logger; // Margay v2.2; UPDATE CODE TO INDICATE THIS
 
-// I2CVals for Symbiont
+// I2CVals for Apis
 uint8_t I2CVals[] = {0x50}; // DEFAULT
 
 //Number of seconds between readings
@@ -201,9 +199,8 @@ void initialize(){
 >> Currently nearly identical to Margay code, by design. Add telemetry with Particle Boron.
 
 ```c++
-// Include the Symbiont library
 #include "Resnik.h"
-#include "SymbiontLiDAR.h"
+#include "Apis.h"
 
 // Declare variables -- just as strings
 // Empty header to start; will include sensor labels and information
@@ -211,11 +208,11 @@ String header;
 String data;
 
 // Instantiate classes
-SymbiontLiDAR myLaser;
+Apis myLaser;
 Resnik Logger;
 
 
-// I2CVals for Symbiont
+// I2CVals for Apis
 uint8_t I2CVals[] = {0x50}; // DEFAULT
 
 //Number of seconds between readings
@@ -249,7 +246,7 @@ This is what we used for our build; you can be creative based on materials and a
 
 * Main enclosure
   * Polycase box [WC-20F (clear lid)](https://www.polycase.com/wc-20f)
-  * [2x \#4 screws](https://www.polycase.com/screws-mbr-100) to mount Symbiont in box
+  * [2x \#4 screws](https://www.polycase.com/screws-mbr-100) to mount Apis board in box
   * Cable gland ([Heyco M4365](https://www.heyco.com/Liquid_Tight_Cordgrips/product.cfm?product=Liquid-Tight-Cordgrips-Metric&section=Liquid_Tight_Cordgrips)) for cable to LiDAR Lite
   * Strain-relieved cable gland ([Heyco M4425](https://www.heyco.com/Liquid_Tight_Cordgrips/product.cfm?product=Liquid-Tight-Cordgrips-Pigtail-Metric&section=Liquid_Tight_Cordgrips)) for cable to logger
   * Desiccant packs
@@ -279,14 +276,14 @@ This is what we used for our build; you can be creative based on materials and a
 ### Assembly
 
 Prior to assembly, ensure that you have:
-* [Uploaded the firmware to the Symbiont board](#Uploading-the-firmware)
+* [Uploaded the firmware to the Apis board](#Uploading-the-firmware)
 * Fabricated [the mounting plate](CNC) (see also the [Easel online CNC setup](https://easel.inventables.com/projects/VMmCoOyJyiiKTospk1NBBQ)) if desired.
 
 1. Drill and tap 12 mm holes in the side of the box. Use a M12-1.5 tap for the threads.
 
-2. Install the Symbiont board as shown below using two of the \#4 self-tapping screws.
+2. Install the Apis board as shown below using two of the \#4 self-tapping screws.
 
-![Symbiont prototype in box](Documentation/images/PrototypeInBox_top_withScale_20200501.jpg)
+![Apis prototype in box](Documentation/images/PrototypeInBox_top_withScale_20200501.jpg)
 
 3. Using the sealing screws, cap nuts, and washers, install the LiDAR Lite sensor onto the lid. By mounting the LiDAR Lite at an angle, you can fix it to the box lid in a way that still allows the box to open and close properly. The cap nuts go on the outside of the housing.
 
@@ -304,7 +301,7 @@ Prior to assembly, ensure that you have:
 
 9. Place desiccant in the box. I typically install two small desiccant packs on the side of the board above the switch and large capacitor and pack them in so they are unlikely to move; this is in order to keep the indicator LED visible.
 
-10. Securely screw the lid onto the box to seal the LiDAR Lite + Symbiont unit.
+10. Securely screw the lid onto the box to seal the LiDAR Lite + Apis unit.
 
 11. Mark the corner of the box next to the Hall-effect sensor, and mark the orientations of the roll and pitch axes. The pitch axis should be positive when the long strain-relieved cable gland tilts upwards. The roll axis should be positive when, when looking at the side of the assembly such that the long strain-relieved cable gland is on the left and the laser rangefinder is pointed up, the laser rangefinder rolls towards you.
 
@@ -328,7 +325,7 @@ Prior to assembly, ensure that you have:
 
 ![Field installation prototype in the lab](Documentation/images/FieldInstallation_LabPrototype_orig2019-09-09_20200501.jpg)
 
-***Lab mock-up of field installation for LiDAR Lite.*** *The boxes at right contain [Northern Widget Margay](https://github.com/NorthernWidget-Skunkworks/Project-Margay) data loggers with a single cable gland to connect to the Symbiont box. The two posts next to them provide examples of how to connect the 3/4" EMT conduit to some fixed point in the environment, either the side of a flat(ish) wall (right) -- though the brackets aren't necessary or even always good, since we can bolt right through the pipe -- or to a flat(ish) surface using a floor flange. We drilled holes through the conduit to attach 1/4" eye bolts (1/4"-20, 1.5" long) using nuts, lock washers, and washers, to the conduit. These eye bolts then held turnbuckles to which we attached cables (lower left). The other end of the cables can be attached via sleeve or wedge anchors to rock, or to other sturdy structures. The LiDAR Lite + Symbiont is in the upper left corner, albeit attached in a way that would have it looking up... unless it were attached to the end of the 90-degree bend.*
+***Lab mock-up of field installation for LiDAR Lite.*** *The boxes at right contain [Northern Widget Margay](https://github.com/NorthernWidget-Skunkworks/Project-Margay) data loggers with a single cable gland to connect to the Apis box. The two posts next to them provide examples of how to connect the 3/4" EMT conduit to some fixed point in the environment, either the side of a flat(ish) wall (right) -- though the brackets aren't necessary or even always good, since we can bolt right through the pipe -- or to a flat(ish) surface using a floor flange. We drilled holes through the conduit to attach 1/4" eye bolts (1/4"-20, 1.5" long) using nuts, lock washers, and washers, to the conduit. These eye bolts then held turnbuckles to which we attached cables (lower left). The other end of the cables can be attached via sleeve or wedge anchors to rock, or to other sturdy structures. The LiDAR Lite + Apis is in the upper left corner, albeit attached in a way that would have it looking up... unless it were attached to the end of the 90-degree bend.*
 
 ### Mast construction
 
@@ -385,7 +382,7 @@ The quality of any zeroing with the Hall-effect sensor will be limited by the ~1
 ***Alternative method: installing on the side of a rock.***
 
 ![Culvert deployment with context](Documentation/images/DeploymentCulvert_2019-09-15_16.32.40.jpg)
-***Full mast installed on the side of a rock.*** *Note the LiDAR Lite + Symbiont and the data-logger box.
+***Full mast installed on the side of a rock.*** *Note the LiDAR Lite + Apis and the data-logger box.
 
 ## Acknowledgments
 
