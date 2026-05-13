@@ -53,6 +53,10 @@ Paul, J. D., Buytaert, W., & Sah, N.(2020). A technical evaluation of lidar-base
 
 ## Technical specifications
 
+![Assembled Apis unit](Documentation/images/Apis_v010_assembled_front_20250206.jpg)
+
+***Assembled Apis unit.*** *The front face shows pitch and roll orientation conventions and the "zero" location (oval cutout, lower center) where the magnet is tapped to calibrate the accelerometer.*
+
 ### Electronic Hardware
 
 * Microcontroller (computer) core
@@ -82,6 +86,10 @@ Paul, J. D., Buytaert, W., & Sah, N.(2020). A technical evaluation of lidar-base
 * Open-source licensing via CC BY-SA 4.0
 
 ![Apis board](Documentation/images/SymbiontLiDAR_v010_top_annotated_20210408.png)
+
+![Apis board top](Documentation/images/Apis_v010_board_top_20250206.jpg)
+
+***Apis v0.1 board, top side.*** *Minnesota quarter (24.3 mm diameter) for scale.*
 
 ### Electronic Software and Firmware
 
@@ -417,7 +425,9 @@ Prior to assembly, ensure that you have:
 
 ![Side view: short axis, LiDAR Lite cable, with roll +/- marked](Documentation/images/SymbiontRoll.png)
 
->> Add an annotated picture of Hall-Effect sensor location
+![Assembled Apis unit showing pitch, roll, and Hall-effect zero location](Documentation/images/Apis_v010_assembled_front_20250206.jpg)
+
+***Pitch, roll, and Hall-effect calibration location on the assembled unit.*** *The "zero" oval cutout on the lower center of the box face marks where to tap the magnet.*
 
 12. Place the box on a measured flat surface and tap the magnet to the marked location by the Hall Effect sensor. This will appropriately zero the offsets for the sensor and increase its near-horizontal accuracy significantly. This must be done when the sensor is powered; the LED will light up during the full duration of magnetic contact. When connected to a logger, this can be done by putting the magnet in place, hitting the "RESET" button (e.g., on a Margay logger), and then holding the magnet in place with the read light on until the first reading is complete. Doing this while connected to a computer is recommended in order to see the first reading on the serial monitor and double check that the zeroing/calibration is appropriate. For a convenient magnet holder, you can use our [3D-printable magnetic wand][3Dprint], which holds a small rare-Earth magnet. This may be a generic part, though this [3/8" x 1/8" Neodymium Disk Magnet](https://www.apexmagnets.com/magnets/3-8-x-1-8-disc-neodymium-magnet) works well in our experience.
 
