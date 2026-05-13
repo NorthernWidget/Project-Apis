@@ -247,7 +247,7 @@ void initialize(){
 
 ### Northern Widget Resnik code
 
->> Currently nearly identical to Margay code, by design. Add telemetry with Particle Boron.
+>> The Resnik/Okapi system uses a Particle Boron for cellular telemetry — the defining capability that distinguishes it from the Margay. That telemetry component is not yet shown here; the code below is currently identical to the Margay example. See [issue #21](https://github.com/NorthernWidget/Project-Apis/issues/21).
 
 ```c++
 #include "Resnik.h"
