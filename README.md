@@ -3,6 +3,33 @@
 # Project-Apis
 Design files for a support and interface unit for the Garmin LiDAR Lite.
 
+## Contents
+
+- [Namesake](#namesake)
+- [Technical specifications](#technical-specifications)
+  - [Electronic hardware](#electronic-hardware)
+  - [Electronic software and firmware](#electronic-software-and-firmware)
+- [Assembly](#assembly)
+  - [Producing circuit boards](#producing-circuit-boards)
+  - [Populating circuit boards](#populating-circuit-boards)
+  - [Reflowing circuit boards](#reflowing-circuit-boards)
+  - [Debugging circuit boards](#debugging-circuit-boards)
+- [Firmware](#firmware)
+  - [Downloading and installing the Arduino IDE](#downloading-and-installing-the-arduino-ide)
+  - [AVR ISP](#avr-isp)
+  - [Uploading the firmware](#uploading-the-firmware)
+- [Writing a program to connect to the Apis](#writing-a-program-to-connect-to-the-apis)
+  - [Very simple Arduino code](#very-simple-arduino-code)
+  - [Northern Widget Margay code](#northern-widget-margay-code)
+  - [Northern Widget Resnik code](#northern-widget-resnik-code)
+- [Register map and firmware internals](#register-map-and-firmware-internals)
+- [Housing and cabling](#housing-and-cabling)
+  - [Parts required](#parts-required)
+  - [Assembly](#assembly-1)
+- [Field installation](#field-installation)
+  - [Mast construction](#mast-construction)
+- [Acknowledgments](#acknowledgments)
+
 ## Namesake
 
 ### Current: Apis
@@ -59,7 +86,7 @@ Paul, J. D., Buytaert, W., & Sah, N.(2020). A technical evaluation of lidar-base
 ### Electronic Software and Firmware
 
 * Programmable using the Arduino IDE https://www.arduino.cc/en/main/software
-* [Firmware](Firmware) available in this repository. At the time of writing, "LiDAR_InterfaceDemo" is the most up-to-date prototype firmware.
+* [Firmware](Firmware/Apis_LiDAR_Firmware) available in this repository.
 * [Software](https://github.com/NorthernWidget/Apis_Library) to use the Apis with Arduino-compatible devices
 * Open-source licensing via GNU GPL 3.0
 
@@ -75,7 +102,31 @@ Assembling this sensor is possible by hand with sufficient skill and the followi
 * Solder wick
 
 Most of the components on this board are coarse enough in pitch that assembly by hand is expected to be relatively straightforward. However, if you are concerned about this, there are PCB assembly workshops located in many parts of the world.
->> THOUGHT: I have basic instructions for assembly on the [Project Walrus](https://github.com/NorthernWidget-Skunkworks/Project-TPDH-Walrus) README; I will not reproduce these here just yet, as we might want to set up a separate assembly guide, mostly with good links to existing resources, since our writing something of this nature would be to reinvent the wheel.
+
+### Producing circuit boards
+
+We recommend having circuit boards produced by a reputable manufacturer. Many are located in China, India, and other countries worldwide. You will need to provide the Gerber files, available in this repository alongside the board design files.
+
+### Populating circuit boards
+
+Before placing components, you will need solder paste and a stencil. A stencil allows you to apply a controlled, even amount of paste to all pads at once. If you have access to a laser cutter, you can [create your own stencil](https://learn.adafruit.com/smt-manufacturing/laser-cut-stencils); otherwise, most PCB manufacturers offer stencil production as an add-on service. In a pinch, a solder-paste syringe works but increases the risk of bridged connections. Additional guidance on stenciling is available [here](https://www.sparkfun.com/tutorials/58).
+
+Once paste is applied, use tweezers — or a pick-and-place machine if available — to place each component onto its pads in the correct orientation. Slight misalignment is acceptable; surface tension from the molten solder will help pull components into place during reflow.
+
+### Reflowing circuit boards
+
+Reflowing heats the solder paste until it flows and bonds components to the board. A basic introduction is available [here](https://learn.sparkfun.com/tutorials/electronics-assembly/reflow). Common methods include:
+
+1. **Professional reflow oven** — the most consistent method
+2. **Converted toaster oven** — affordable and effective; see [SparkFun's guide](https://www.sparkfun.com/tutorials/60) and many other online references
+3. **Electric skillet** — surprisingly effective for simple boards; [guide here](https://www.sparkfun.com/tutorials/59)
+4. **Hot-air rework station** — more labor-intensive but gives fine control; suitable for single boards or small runs; [guide here](https://learn.sparkfun.com/tutorials/how-to-use-a-hot-air-rework-station/all)
+
+After reflow, clean up any bridged connections with **solder wick**.
+
+### Debugging circuit boards
+
+Inspect the board carefully after reflow. Look for bridged connections, cold joints, or components that shifted out of alignment. A multimeter is essential for checking continuity and identifying shorts. An oscilloscope or logic analyzer can help verify that the microcontroller, accelerometer, and I2C bus are functioning correctly. If you are new to debugging circuit boards, working with an electrical engineering student or professional — even for a single session — can save significant time.
 
 ## Firmware
 
@@ -95,7 +146,7 @@ Many devices exist to upload firmware, including:
 
 ### Uploading the firmware
 
-Using this ISP, upload (as of the time of writing): [the Arduino sketch in this folder](Firmware/AdditionalFirmware/LiDAR_Accelerometer_InterfaceDemo). To do so, follow these steps:
+Using this ISP, upload [the firmware sketch](Firmware/Apis_LiDAR_Firmware) to the board. To do so, follow these steps:
 
 1. Open the Arduino IDE.
 2. Follow [these instructions](https://github.com/SpenceKonde/ATTinyCore/blob/master/Installation.md) to install the [ATTinyCore board definitions](https://github.com/SpenceKonde/ATTinyCore)
@@ -166,7 +217,7 @@ String data;
 
 // Instantiate classes
 Apis myLaser;
-Margay Logger; // Margay v2.2; UPDATE CODE TO INDICATE THIS
+Margay Logger; // Margay v2.2
 
 // I2CVals for Apis
 uint8_t I2CVals[] = {0x50}; // DEFAULT
@@ -237,6 +288,63 @@ void initialize(){
     myLaser.begin();
 }
 ```
+
+## Register map and firmware internals
+
+The Apis firmware runs on an ATTiny1634 and exposes a 32-byte I2C register map to the host logger. The default I2C address is `0x50`.
+
+### Measurement loop
+
+On each measurement cycle, the firmware:
+1. Powers on the LiDAR Lite via its switchable 5 V supply
+2. Triggers a range measurement over software I2C
+3. Reads the 16-bit range value and signal strength from the LiDAR Lite
+4. Reads the 3-axis accelerometer (LIS3DH)
+5. Updates all output registers
+6. Powers down the LiDAR Lite
+
+The status register (`0x00`) reads `0x01` when a valid measurement is available and `0x00` while a measurement is in progress. The [Apis_Library](https://github.com/NorthernWidget/Apis_Library) polls this register automatically before returning data.
+
+### Register map
+
+| Address | Name | R/W | Description |
+|---------|------|-----|-------------|
+| `0x00` | `REG_STATUS` | R | Measurement ready: `1` = ready, `0` = busy |
+| `0x01` | `REG_NAME_0` | R | Device name byte 0: `'A'` |
+| `0x02` | `REG_NAME_1` | R | Device name byte 1: `'p'` |
+| `0x03` | `REG_NAME_2` | R | Device name byte 2: `'i'` |
+| `0x04` | `REG_NAME_3` | R | Device name byte 3: `'s'` |
+| `0x05` | `REG_HW_MAJOR` | R | Hardware major version |
+| `0x06` | `REG_HW_MINOR` | R | Hardware minor version |
+| `0x07` | `REG_FW_PATCH` | R | Firmware patch version |
+| `0x08` | `REG_RANGE_L` | R | Range low byte (little-endian int16, cm) |
+| `0x09` | `REG_RANGE_H` | R | Range high byte |
+| `0x0A` | `REG_SIGNAL_STR` | R | LiDAR Lite signal strength (0–255) |
+| `0x0B` | `REG_CONFIG` | R/W | Sensitivity mode (see below) |
+| `0x0C` | `REG_I2C_ADDR` | W | Write to change I2C address (persists to EEPROM) |
+| `0x10`–`0x15` | `REG_ACCEL_BASE` | R | Accelerometer raw X/Y/Z, three little-endian int16 values |
+| `0x18`–`0x1D` | `REG_OFFSET_BASE` | R | Accelerometer offsets X/Y/Z, three little-endian int16 values (set via Hall-effect calibration) |
+
+### Sensitivity modes
+
+Write one of the following values to `REG_CONFIG` (`0x0B`) to set the LiDAR Lite measurement sensitivity:
+
+| Value | Constant | Description |
+|-------|----------|-------------|
+| `0` | `SENSITIVITY_BALANCED` | Default; balanced range and noise |
+| `1` | `SENSITIVITY_HIGH` | Higher sensitivity; reduced maximum range |
+| `2` | `SENSITIVITY_LOW` | Lower sensitivity; extended maximum range |
+| `3` | `SENSITIVITY_MAX_RANGE` | Maximum range mode |
+
+The Apis_Library exposes these as named constants passed to `begin()`.
+
+### Persistent I2C address
+
+Writing to `REG_I2C_ADDR` (`0x0C`) saves the new address to EEPROM byte 6. It takes effect on the next power cycle. This allows multiple Apis boards to share a single I2C bus — assign each a unique address (e.g., `0x50`, `0x51`) and pass that address to the `Apis` constructor.
+
+### Firmware compatibility and detection
+
+The Apis_Library reads name bytes `0x01`–`0x04` during `begin()` and returns `false` if they do not spell `Apis`. This detects boards still running older firmware (which did not expose these bytes), signaling that a firmware update is required before the library can function. Always check the return value of `begin()` when deploying to new or previously programmed hardware.
 
 ## Housing and cabling
 
