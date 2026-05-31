@@ -299,7 +299,11 @@ void initialize(){
 
 ## Register map and firmware internals
 
-The Apis firmware runs on an ATTiny1634 and exposes a 32-byte I2C register map to the host logger. The default I2C address is `0x50`.
+The Apis firmware runs on an ATTiny1634 and exposes an I2C register map to the host logger. The default I2C address is `0x50`.
+
+The device exposes a flat, byte-addressable virtual address space. The master writes a 1-byte starting address, then reads up to 32 bytes in one transaction. Pages are 32-byte aligned.
+
+Two layouts exist: the **current firmware** (Schema 1 prototype, deployed) and the **proposed** layout under [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification) Schema 1, which the firmware will be updated to implement. The proposed layout is not yet in the firmware.
 
 ### Measurement loop
 
@@ -311,9 +315,9 @@ On each measurement cycle, the firmware:
 5. Updates all output registers
 6. Powers down the LiDAR Lite
 
-The status register (`0x00`) reads `0x01` when a valid measurement is available and `0x00` while a measurement is in progress. The [Apis_Library](https://github.com/NorthernWidget/Apis_Library) polls this register automatically before returning data.
+### Current register map (deployed firmware — Schema 1 prototype)
 
-### Register map
+A single 32-byte page. Status and identity are mixed; no schema byte.
 
 | Address | Name | R/W | Description |
 |---------|------|-----|-------------|
@@ -325,34 +329,99 @@ The status register (`0x00`) reads `0x01` when a valid measurement is available 
 | `0x05` | `REG_HW_MAJOR` | R | Hardware major version |
 | `0x06` | `REG_HW_MINOR` | R | Hardware minor version |
 | `0x07` | `REG_FW_PATCH` | R | Firmware patch version |
-| `0x08` | `REG_RANGE_L` | R | Range low byte (little-endian int16, cm) |
-| `0x09` | `REG_RANGE_H` | R | Range high byte |
+| `0x08`–`0x09` | `REG_RANGE` | R | Range, little-endian int16 [cm] |
 | `0x0A` | `REG_SIGNAL_STR` | R | LiDAR Lite signal strength (0–255) |
-| `0x0B` | `REG_CONFIG` | R/W | Sensitivity mode (see below) |
+| `0x0B` | `REG_CONFIG` | R/W | Sensitivity mode [bits 1:0] (see below) |
 | `0x0C` | `REG_I2C_ADDR` | W | Write to change I2C address (persists to EEPROM) |
-| `0x10`–`0x15` | `REG_ACCEL_BASE` | R | Accelerometer raw X/Y/Z, three little-endian int16 values |
-| `0x18`–`0x1D` | `REG_OFFSET_BASE` | R | Accelerometer offsets X/Y/Z, three little-endian int16 values (set via Hall-effect calibration) |
+| `0x0D`–`0x0F` | — | — | Reserved |
+| `0x10`–`0x15` | `REG_ACCEL` | R | Accel X/Y/Z, three little-endian int16 values |
+| `0x16`–`0x17` | — | — | Reserved |
+| `0x18`–`0x1D` | `REG_OFFSET` | R | Accel offsets X/Y/Z, three little-endian int16 values |
+| `0x1E`–`0x1F` | — | — | Reserved |
+
+### Proposed register map (NW-Device-Specification Schema 1)
+
+Three 32-byte pages. Identity is EEPROM-backed; sensor data is SRAM-backed; calibration is served directly from EEPROM.
+
+**Page 0 (0x00–0x1F) — Identity (EEPROM)**
+
+```
+Block 0 (0x00–0x07)   Core identity
+  0x00        0x01              Schema (NW-Device-Specification v1)
+  0x01–0x04   'A','p','i','s'   Device name (ASCII)
+  0x05–0x07   0x00,0x00,0x00    Null padding
+
+Block 1 (0x08–0x0F)   Version
+  0x08        HW major
+  0x09        HW minor
+  0x0A        FW patch          (NW combined-repo convention)
+  0x0B–0x0D   0x00,0x00,0x00    Unused (combined repo)
+  0x0E–0x0F   0x00,0x00         Reserved
+
+Block 2 (0x10–0x17)   Serial number
+  0x10–0x11   0x41,0x01         Board type ('A' = 0x41, revision index 1)
+  0x12–0x13   [manufacture]     Group ID
+  0x14–0x15   [manufacture]     Unique ID
+  0x16–0x17   0x00,0x00         FirmwareID (legacy, reserved)
+
+Block 3 (0x18–0x1F)   Integrity + administration
+  0x18–0x1C   0x00 ×5           Reserved
+  0x1D        0x00              Magic byte (reserved; purpose TBD)
+  0x1E        [computed]        CRC-8 of bytes 0x00–0x1D
+  0x1F        0x50              I2C address (writable; 0xFF = use default)
+```
+
+**Page 1 (0x20–0x3F) — Sensor data (SRAM)**
+
+```
+Block 0 (0x20–0x27)   LiDAR
+  0x20        Status            bit 0=ready, bit 1=LiDAR fault, bit 2=accel fault
+  0x21–0x22   Range [cm]        little-endian int16
+  0x23        Signal strength   uint8
+  0x24        Config            sensitivity [bits 1:0], writable
+  0x25–0x27   Reserved
+
+Block 1 (0x28–0x2F)   Accelerometer
+  0x28–0x29   Accel X           little-endian int16
+  0x2A–0x2B   Accel Y           little-endian int16
+  0x2C–0x2D   Accel Z           little-endian int16
+  0x2E–0x2F   Reserved
+
+Block 2–3 (0x30–0x3F)   Reserved
+```
+
+Check bit 0 of 0x20 before using any measurement. If clear, all other Page 1 bytes are stale.
+
+**Page 2 (0x40–0x5F) — Calibration (EEPROM, served directly)**
+
+```
+Block 0 (0x40–0x47)   Accelerometer offsets
+  0x40–0x41   Offset X          little-endian int16
+  0x42–0x43   Offset Y          little-endian int16
+  0x44–0x45   Offset Z          little-endian int16
+  0x46–0x47   Reserved
+
+Block 1–3 (0x48–0x5F)   Reserved
+```
 
 ### Sensitivity modes
 
-Write one of the following values to `REG_CONFIG` (`0x0B`) to set the LiDAR Lite measurement sensitivity:
+Write one of the following values to the config register to set the LiDAR Lite measurement sensitivity:
 
-| Value | Constant | Description |
-|-------|----------|-------------|
-| `0` | `SENSITIVITY_BALANCED` | Default; balanced range and noise |
-| `1` | `SENSITIVITY_HIGH` | Higher sensitivity; reduced maximum range |
-| `2` | `SENSITIVITY_LOW` | Lower sensitivity; extended maximum range |
-| `3` | `SENSITIVITY_MAX_RANGE` | Maximum range mode |
-
-The Apis_Library exposes these as named constants passed to `begin()`.
+| Value | Description |
+|-------|-------------|
+| `0` | Balanced range and noise (default) |
+| `1` | Higher sensitivity; reduced maximum range |
+| `2` | Lower sensitivity; extended maximum range |
+| `3` | Maximum range mode |
 
 ### Persistent I2C address
 
-Writing to `REG_I2C_ADDR` (`0x0C`) saves the new address to EEPROM byte 6. It takes effect on the next power cycle. This allows multiple Apis boards to share a single I2C bus — assign each a unique address (e.g., `0x50`, `0x51`) and pass that address to the `Apis` constructor.
+The I2C address register is writable and persisted to EEPROM. It takes effect on the next power cycle. This allows multiple Apis boards to share a single I2C bus — assign each a unique address (e.g., `0x50`, `0x51`).
 
 ### Firmware compatibility and detection
 
-The Apis_Library reads name bytes `0x01`–`0x04` during `begin()` and returns `false` if they do not spell `Apis`. This detects boards still running older firmware (which did not expose these bytes), signaling that a firmware update is required before the library can function. Always check the return value of `begin()` when deploying to new or previously programmed hardware.
+The Apis_Library reads the name bytes during `begin()` and returns `false` if they do not spell `Apis`. Check the return value of `begin()` when deploying to new or previously programmed hardware.
 
 ## Housing and cabling
 
