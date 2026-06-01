@@ -571,6 +571,19 @@ The quality of any zeroing with the Hall-effect sensor will be limited by the ~1
 ![Culvert deployment with context](Documentation/images/DeploymentCulvert_2019-09-15_16.32.40.jpg)
 ***Full mast installed on the side of a rock.*** *Note the LiDAR Lite + Apis and the data-logger box.
 
+## NW-Device-Specification — Schema 1, Page 0
+
+Implements [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification) Schema 1. The 32-byte identity block (Page 0) is stored at the top of EEPROM:
+
+```
+Block 0:  Schema=0x01, Name='A','p','i','s',0x00,0x00,0x00
+Block 1:  HW major=[mfr], HW minor=[mfr], FW patch=[mfr], 0x00,0x00,0x00, Reserved
+Block 2:  Board type=0x4100 ('A'=0x41, rev 0), Group ID=[mfr], Unique ID=[mfr], FirmwareID=0x0000
+Block 3:  Reserved, Magic=0x00, CRC=[computed], I2C address=0x41
+```
+
+Legacy deployed units carry board type `0x6C00` and I²C address `0x50` (pre-Schema-1).
+
 ## Acknowledgments
 
 Support for this project provided by:
