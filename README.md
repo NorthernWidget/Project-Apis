@@ -377,11 +377,11 @@ Block 3 (0x18–0x1F)   Integrity + administration
 Block 0 (0x20–0x27)   LiDAR
   0x20        Status            bit 0=ready, bit 1=LiDAR fault, bit 2=accel fault,
                                 bit 7=pan-fault
-  0x21–0x22   Range [cm]        little-endian int16
-  0x23        Signal strength   uint8
-  0x24        Config            sensitivity [bits 1:0], writable
-  0x25–0x26   Reserved
-  0x27        Extended faults (reserved, 0x00)
+  0x21        Extended faults (reserved, 0x00)
+  0x22–0x23   Range [cm]        little-endian int16
+  0x24        Signal strength   uint8
+  0x25        Config            sensitivity [bits 1:0], writable
+  0x26–0x27   Reserved
 
 Block 1 (0x28–0x2F)   Accelerometer
   0x28–0x29   Accel X           little-endian int16
