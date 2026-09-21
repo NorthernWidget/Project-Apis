@@ -38,7 +38,7 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // library. The hardware version lives in Page 0 (EEPROM), written at
 // provisioning; the firmware writes this constant into the served copy of
 // Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
-#define FW_FW_PATCH 0
+#define FW_FW_PATCH 1
 
 // Page 0 (identity, 32 bytes) is the top of EEPROM: 0xE0-0xFF on the
 // ATtiny1634's 256-byte EEPROM. Written once by NW-Provision; read at boot.
