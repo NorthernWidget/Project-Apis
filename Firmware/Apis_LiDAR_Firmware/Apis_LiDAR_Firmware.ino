@@ -79,13 +79,26 @@ unsigned long period = 100; //Number of ms between sample events for continuious
 //               takes effect on next boot; falls back to 0x50 if 0xFF
 //   0x10–0x15   Accelerometer X, Y, Z raw, little-endian int16 each
 //   0x18–0x1D   Accelerometer offsets X, Y, Z, little-endian int16 each
-uint8_t reg[32] = {
+// Register array: three 32-byte pages (NW-Device-Specification). Page 0
+// (0x00–0x1F) identity, Page 1 (0x20–0x3F) status and sensor data, Page 2
+// (0x40–0x5F) calibration. A controller writes a start address, then reads
+// up to 32 bytes with auto-increment (see requestEvent). The contents below
+// are still the pre-Schema-1 map; they move to the Schema 1 layout in the
+// following commits.
+#define REG_SIZE 96
+uint8_t reg[REG_SIZE] = {
   0,                         // 0x00: status (not ready)
   'A', 'p', 'i', 's',        // 0x01–0x04: device name
   FW_HW_MAJOR, FW_HW_MINOR,  // 0x05–0x06: hardware version
   FW_FW_PATCH                 // 0x07: firmware patch version
-  // 0x08–0x1F: zero-initialised; measurements updated at runtime
+  // 0x08–0x5F: zero-initialised; measurements updated at runtime
 };
+
+// Registers a controller may write. Everything else is read-only and writes
+// to it are ignored (NW-Device-Specification, Page 1 rules).
+bool isWritable(uint8_t pos) {
+  return pos == 0x0B || pos == 0x0C;   // pre-Schema-1: config, I2C address
+}
 // bool startReading = true; //Flag used to start a new converstion, make a conversion on startup
 // const unsigned int updateRate = 5; //Rate of update
 
@@ -93,7 +106,6 @@ SlowSoftI2CMaster si = SlowSoftI2CMaster(PIN_A2, PIN_A3, true);  //Initialize so
 
 volatile bool stopFlag = false; //Used to indicate a stop condition 
 volatile uint8_t regID = 0; //Used to denote which register will be read from
-volatile bool repeatedStart = false; //Used to show if the start was repeated or not
 
 int16_t offsets[3] = {0};  //X,Y,Z acceleration offsets to zero the angle of the device 
 int16_t accelVals[3] = {0}; //Global storage for acceleration data values to be shared between EEPROM functions and getter functions 
@@ -558,20 +570,17 @@ void splitAndLoad(uint8_t Pos, long Val)  //Write 32 bits
 
 boolean addressEvent(uint16_t address, uint8_t count)
 {
-  repeatedStart = (count > 0 ? true : false);
   return true; // send ACK to master
 }
 
 void requestEvent()
 { 
-  //Allow for repeated start condition 
-  if(repeatedStart) {
-    for(int i = 0; i < 2; i++) {
-      Wire.write(reg[regID + i]);
-    }
-  }
-  else {
-    Wire.write(reg[regID]);
+  // Serve up to one full page from the requested register with auto-increment.
+  // WireS clocks out only as many bytes as the controller asks for; the rest
+  // of the buffer is discarded at the stop condition. Reads past the end of
+  // the array wrap, so a controller never receives bytes from outside it.
+  for(uint8_t i = 0; i < 32; i++) {
+    Wire.write(reg[(regID + i) % REG_SIZE]);
   }
 }
 
@@ -583,7 +592,7 @@ void receiveEvent(int DataLen)
       while(Wire.available() < 2); //Only option for writing would be register address, and single 8 bit value
       uint8_t Pos = Wire.read();
       uint8_t Val = Wire.read();
-      //Check for validity of write??
+      if (!isWritable(Pos)) return; //Read-only register: ignore the write
       reg[Pos] = Val; //Set register value
       if (Pos == 0x0C) EEPROM.write(6, Val); //Persist I2C address; takes effect on next boot
   }
