@@ -44,6 +44,9 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // ATtiny1634's 256-byte EEPROM. Written once by NW-Provision; read at boot.
 #define PAGE0_BASE   (E2END + 1 - 32)
 #define REG_I2C_ADDR 0x1F
+// Page 2 (calibration) sits immediately below Page 0: 0xC0-0xDF. Its first
+// six bytes hold the accelerometer offsets (Page 2 Block 0, registers 0x40-0x45).
+#define PAGE2_BASE   (E2END + 1 - 64)
 #define ADR_DEFAULT  0x41   // Schema 1 'A'; used when Page 0 byte 0x1F is 0xFF
 
 // #define ADR_ALT 0x41 //Alternative device address
@@ -677,8 +680,8 @@ void updateOffset(int16_t *AxisData)  //Pass in array of X,Y,Z offset values
   // }
   for(int i = 0; i < 3; i++) {
     // ((EEPROM.read(p + i) << 8) | EEPROM.read(2*i + 1)); //Read from desired entry in EEPROM and concatonate
-    EEPROM.write(2*i, AxisData[i] >> 8);  //Write MSB
-    EEPROM.write(2*i + 1, AxisData[i] & 0xFF);  //Write LSB
+    EEPROM.update(PAGE2_BASE + 2*i, AxisData[i] >> 8);  //Write MSB
+    EEPROM.update(PAGE2_BASE + 2*i + 1, AxisData[i] & 0xFF);  //Write LSB
   }
 }
 
@@ -695,7 +698,8 @@ void getOffsets()
 
   // uint8_t Val[4] = {0}; //Blank array to read bytes into which can be converted to single float
   for(int i = 0; i < 3; i++) {
-      offsets[i] = (int)((EEPROM.read(2*i) << 8) | EEPROM.read(2*i + 1)); //Read from desired entry in EEPROM and concatonate
+      offsets[i] = (int)((EEPROM.read(PAGE2_BASE + 2*i) << 8) | EEPROM.read(PAGE2_BASE + 2*i + 1)); //Read from desired entry in EEPROM and concatonate
+      if (offsets[i] == -1) offsets[i] = 0; //0xFFFF = never written (fresh Page 2): no offset
     // memcpy(&offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
   }
 }
