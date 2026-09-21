@@ -339,7 +339,7 @@ Block 1 (0x08–0x0F)   Version
   0x0E–0x0F   0x00,0x00         Reserved
 
 Block 2 (0x10–0x17)   Serial number
-  0x10–0x11   0x41,0x01         Board type ('A' = 0x41, revision index 1)
+  0x10–0x11   0x41,0x00         Board type ('A' = 0x41, hardware major 0; NW-Registry 0x4100)
   0x12–0x13   [provisioning]    Group ID
   0x14–0x15   [provisioning]    Unique ID
   0x16–0x17   0x00,0x00         FirmwareID (legacy, reserved)
@@ -596,18 +596,9 @@ The quality of any zeroing with the Hall-effect sensor will be limited by the ~1
 ![Culvert deployment with context](Documentation/images/DeploymentCulvert_2019-09-15_16.32.40.jpg)
 ***Full mast installed on the side of a rock.*** *Note the LiDAR Lite + Apis and the data-logger box.
 
-## NW-Device-Specification — Schema 1, Page 0
+## Legacy identity
 
-Implements [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification) Schema 1. The 32-byte identity block (Page 0) is stored at the top of EEPROM:
-
-```
-Block 0:  Schema=0x01, Name='A','p','i','s',0x00,0x00,0x00
-Block 1:  HW major=[mfr], HW minor=[mfr], FW patch=[mfr], 0x00,0x00,0x00, Reserved
-Block 2:  Board type=0x4100 ('A'=0x41, rev 0), Group ID=[mfr], Unique ID=[mfr], FirmwareID=0x0000
-Block 3:  Reserved, Magic=0x00, CRC=[computed], I2C address=0x41
-```
-
-Legacy deployed units carry board type `0x6C00` and I²C address `0x50` (pre-Schema-1).
+Units programmed before Schema 1 carry board type `0x6C00` (the Symbiont-LiDAR code) in the old 8-byte serial block and answer at I²C address `0x50`. They are refused by a Schema 1 library until reflashed and provisioned; see [Register map and firmware internals](#register-map-and-firmware-internals).
 
 ## Acknowledgments
 
