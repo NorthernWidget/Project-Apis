@@ -359,7 +359,7 @@ Chip table (index for status fault bits, control chip-select bits, and the fault
 
 | Index | Chip | Measurements |
 |-------|------|--------------|
-| 0 | LiDAR Lite v3 | range, signal strength |
+| 0 | LiDAR Lite v3HP | range, signal strength |
 | 1 | LIS3DH accelerometer | X, Y, Z |
 
 ```
