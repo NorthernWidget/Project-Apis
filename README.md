@@ -299,51 +299,29 @@ void initialize(){
 
 ## Register map and firmware internals
 
-The Apis firmware runs on an ATTiny1634 and exposes an I2C register map to the host logger. The default I2C address is `0x50`.
+The Apis firmware runs on an ATTiny1634 and exposes an I2C register map to the host logger, laid out per [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification) Schema 1. The default I2C address is `0x41` (ASCII `'A'`); the address is stored in Page 0 and can be changed (see below).
 
-The device exposes a flat, byte-addressable virtual address space. The master writes a 1-byte starting address, then reads up to 32 bytes in one transaction. Pages are 32-byte aligned.
+The device exposes a flat, byte-addressable virtual address space. The controller writes a 1-byte starting address, then reads up to 32 bytes in one transaction; the firmware auto-increments. Pages are 32-byte aligned.
 
-Two layouts exist: the **current firmware** (Schema 1 prototype, deployed) and the **proposed** layout under [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification) Schema 1, which the firmware will be updated to implement. The proposed layout is not yet in the firmware.
+The map below is what the firmware on `master` implements (firmware patch 1, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
 
 ### Measurement loop
 
-On each measurement cycle, the firmware:
-1. Powers on the LiDAR Lite via its switchable 5 V supply
-2. Triggers a range measurement over software I2C
-3. Reads the 16-bit range value and signal strength from the LiDAR Lite
-4. Reads the 3-axis accelerometer (LIS3DH)
-5. Updates all output registers
-6. Powers down the LiDAR Lite
+The firmware free-runs: on each cycle (every 100 ms) it
 
-### Current register map (deployed firmware — Schema 1 prototype)
+1. Clears the ready bit, reads the chip-select bits from the control register, and consumes any pending trigger
+2. Powers on the LiDAR Lite via its switchable 5 V supply and re-initialises it with the configured sensitivity
+3. If the LiDAR chip is selected: triggers a range measurement over software I2C and reads the 16-bit range and the signal strength
+4. Powers down the LiDAR Lite
+5. If the accelerometer chip is selected: reads the 3-axis accelerometer (LIS3DH) and the stored offsets
+6. Loads status, fault code, and the reading counter, then sets the ready bit, with interrupts disabled so a page read never straddles the update
+7. Waits for the rest of the period, or ends the wait early if the controller writes the trigger bit
 
-A single 32-byte page. Status and identity are mixed; no schema byte.
+### Register map (firmware on `master` — Schema 1)
 
-| Address | Name | R/W | Description |
-|---------|------|-----|-------------|
-| `0x00` | `REG_STATUS` | R | Measurement ready: `1` = ready, `0` = busy |
-| `0x01` | `REG_NAME_0` | R | Device name byte 0: `'A'` |
-| `0x02` | `REG_NAME_1` | R | Device name byte 1: `'p'` |
-| `0x03` | `REG_NAME_2` | R | Device name byte 2: `'i'` |
-| `0x04` | `REG_NAME_3` | R | Device name byte 3: `'s'` |
-| `0x05` | `REG_HW_MAJOR` | R | Hardware major version |
-| `0x06` | `REG_HW_MINOR` | R | Hardware minor version |
-| `0x07` | `REG_FW_PATCH` | R | Firmware patch version |
-| `0x08`–`0x09` | `REG_RANGE` | R | Range, little-endian int16 [cm] |
-| `0x0A` | `REG_SIGNAL_STR` | R | LiDAR Lite signal strength (0–255) |
-| `0x0B` | `REG_CONFIG` | R/W | Sensitivity mode [bits 1:0] (see below) |
-| `0x0C` | `REG_I2C_ADDR` | W | Write to change I2C address (persists to EEPROM) |
-| `0x0D`–`0x0F` | — | — | Reserved |
-| `0x10`–`0x15` | `REG_ACCEL` | R | Accel X/Y/Z, three little-endian int16 values |
-| `0x16`–`0x17` | — | — | Reserved |
-| `0x18`–`0x1D` | `REG_OFFSET` | R | Accel offsets X/Y/Z, three little-endian int16 values |
-| `0x1E`–`0x1F` | — | — | Reserved |
+Three 32-byte pages. Page 0 (identity) is copied from EEPROM at boot; Page 1 (status and sensor data) lives in SRAM; Page 2 (calibration) is served from the offsets held in EEPROM.
 
-### Proposed register map (NW-Device-Specification Schema 1)
-
-Three 32-byte pages. Identity is EEPROM-backed; sensor data is SRAM-backed; calibration is served directly from EEPROM.
-
-**Page 0 (0x00–0x1F) — Identity (EEPROM)**
+**Page 0 (0x00–0x1F) — Identity (EEPROM 0xE0–0xFF, written by [NW-Provision](https://github.com/NorthernWidget/NW-Provision))**
 
 ```
 Block 0 (0x00–0x07)   Core identity
@@ -352,44 +330,62 @@ Block 0 (0x00–0x07)   Core identity
   0x05–0x07   0x00,0x00,0x00    Null padding
 
 Block 1 (0x08–0x0F)   Version
-  0x08        HW major
-  0x09        HW minor
-  0x0A        FW patch          (NW combined-repo convention)
+  0x08        HW major          (from EEPROM)
+  0x09        HW minor          (from EEPROM)
+  0x0A        FW patch          written by the firmware into the served copy (FW_FW_PATCH),
+                                so it always matches the code running; the CRC of the served
+                                copy is recomputed
   0x0B–0x0D   0x00,0x00,0x00    Unused (combined repo)
   0x0E–0x0F   0x00,0x00         Reserved
 
 Block 2 (0x10–0x17)   Serial number
   0x10–0x11   0x41,0x01         Board type ('A' = 0x41, revision index 1)
-  0x12–0x13   [manufacture]     Group ID
-  0x14–0x15   [manufacture]     Unique ID
+  0x12–0x13   [provisioning]    Group ID
+  0x14–0x15   [provisioning]    Unique ID
   0x16–0x17   0x00,0x00         FirmwareID (legacy, reserved)
 
 Block 3 (0x18–0x1F)   Integrity + administration
   0x18–0x1C   0x00 ×5           Reserved
-  0x1D        0x00              Magic byte (reserved; purpose TBD)
-  0x1E        [computed]        CRC-8 of bytes 0x00–0x1D
-  0x1F        0x50              I2C address (writable; 0xFF = use default)
+  0x1D        0x4E              Magic byte ('N')
+  0x1E        [computed]        CRC-8/SMBUS of bytes 0x00–0x1D
+  0x1F        0x41              I2C address (writable; 0xFF = use default 0x41)
 ```
 
-**Page 1 (0x20–0x3F) — Sensor data (SRAM)**
+If the CRC in EEPROM does not match, or the schema byte is not 0x01, the firmware still runs but sets the fault byte to "unit: Page 0 checksum" (`0xE3`); the board needs provisioning.
+
+**Page 1 (0x20–0x3F) — Status and sensor data (SRAM)**
 
 Chip table (index for status fault bits, control chip-select bits, and the fault byte):
 
 | Index | Chip | Measurements |
 |-------|------|--------------|
 | 0 | LiDAR Lite v3 | range, signal strength |
-| 1 | LIS2DH12 accelerometer | X, Y, Z |
-
-Block 0 (0x20–0x27) is the universal block defined by [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification#page-1--sensor-data): status (ready, per-chip fault bits, pan-fault), control (trigger, chip select, sleep), reading counter, device config byte at 0x26, latched fault code at 0x27. Device data begins at 0x28. Config (0x26): bits 1:0 = LiDAR sensitivity; bits 7:2 reserved.
+| 1 | LIS3DH accelerometer | X, Y, Z |
 
 ```
+Block 0 (0x20–0x27)   Universal block (NW-Device-Specification)
+  0x20        Status            bit 0 ready; bit 1 LiDAR fault; bit 2 accelerometer fault;
+                                bit 7 pan-fault. Read-only, live.
+  0x21        Control           writable. bit 0 trigger a reading now (the firmware clears it
+                                when the reading starts); bit 1 measure LiDAR; bit 2 measure
+                                accelerometer (power-up: both set); bit 7 sleep — defined by
+                                the spec, not yet implemented here (cleared by the firmware).
+                                Any write to Control clears the fault byte.
+  0x22–0x23   Reading counter   uint16, little-endian, +1 each time ready is set; 0 at boot
+  0x24–0x25   Reserved          for counter extension
+  0x26        Config            writable. bits 1:0 LiDAR sensitivity mode (see below)
+  0x27        Fault             latched until the controller writes Control.
+                                bits 7–5 chip (0 LiDAR, 1 accelerometer, 7 unit);
+                                bits 4–0 kind (1 no-acknowledge, 2 timeout, 3 Page 0 checksum,
+                                6 reset since the controller last wrote Control)
+
 Block 1 (0x28–0x2F)   LiDAR Lite
-  0x28–0x29   Range [cm]        little-endian int16
+  0x28–0x29   Range [cm]        little-endian int16; -9999 on timeout
   0x2A        Signal strength   uint8
   0x2B–0x2F   Reserved
 
 Block 2 (0x30–0x37)   Accelerometer
-  0x30–0x31   Accel X           little-endian int16
+  0x30–0x31   Accel X           little-endian int16 (raw counts, >> 4)
   0x32–0x33   Accel Y           little-endian int16
   0x34–0x35   Accel Z           little-endian int16
   0x36–0x37   Reserved
@@ -397,9 +393,11 @@ Block 2 (0x30–0x37)   Accelerometer
 Block 3 (0x38–0x3F)   Reserved
 ```
 
-Check bit 0 of 0x20 before using any measurement. If clear, all other Page 1 bytes are stale.
+Check bit 0 of 0x20 before using any measurement; if clear, the data registers are stale. Compare the reading counter with the last value read to know whether a new reading has happened since.
 
-**Page 2 (0x40–0x5F) — Calibration (EEPROM, served directly)**
+At boot the fault byte reads `0xE6`, "unit: reset since the controller last wrote Control", so a controller can tell that the device restarted (and lost its volatile configuration) since it last configured it. The first write to Control clears it.
+
+**Page 2 (0x40–0x5F) — Calibration (EEPROM 0xC0–0xDF)**
 
 ```
 Block 0 (0x40–0x47)   Accelerometer offsets
@@ -411,9 +409,11 @@ Block 0 (0x40–0x47)   Accelerometer offsets
 Block 1–3 (0x48–0x5F)   Reserved
 ```
 
+Offsets are written when the Hall-effect switch is triggered with the magnet (the board's "set level" action). A never-written offset (0xFFFF) reads as zero.
+
 ### Sensitivity modes
 
-Write one of the following values to the config register to set the LiDAR Lite measurement sensitivity:
+Write one of the following values to the config register (`0x26`, bits 1:0) to set the LiDAR Lite measurement sensitivity:
 
 | Value | Description |
 |-------|-------------|
@@ -422,13 +422,31 @@ Write one of the following values to the config register to set the LiDAR Lite m
 | `2` | Lower sensitivity; extended maximum range |
 | `3` | Maximum range mode |
 
-### Persistent I2C address
+Configuration is volatile: the controller sets it after every power-up.
 
-The I2C address register is writable and persisted to EEPROM. It takes effect on the next power cycle. This allows multiple Apis boards to share a single I2C bus — assign each a unique address (e.g., `0x50`, `0x51`).
+### I2C address
+
+Page 0 byte `0x1F` holds the address; a write to register `0x1F` persists it (compare-before-write) and it takes effect on the next power cycle. `0xFF` means "use the default", `0x41`. Several Apis boards can share a bus by giving each its own address; choose one not listed in the NW-Device-Specification [bus-occupancy table](https://github.com/NorthernWidget/NW-Device-Specification#bus-occupancy).
 
 ### Firmware compatibility and detection
 
-The Apis_Library reads the name bytes during `begin()` and returns `false` if they do not spell `Apis`. Check the return value of `begin()` when deploying to new or previously programmed hardware.
+A Schema 1 library's `begin()` reads Page 0 Block 0 and refuses the device unless the schema byte is `0x01`, the name spells `Apis`, and the firmware patch at `0x0A` is at least the version the library was written for. A refused `begin()` means: reflash, then provision with NW-Provision. Check the return value of `begin()` when deploying.
+
+### Previous register map (firmware v0.1.x, deployed 2019–2026)
+
+A single 32-byte page, one byte served per request; status and identity mixed; no schema byte. Kept here for boards that have not been reflashed. Default address `0x50`.
+
+| Address | Name | R/W | Description |
+|---------|------|-----|-------------|
+| `0x00` | `REG_STATUS` | R | LiDAR initialised: `1` = ready, `0` = busy |
+| `0x01`–`0x04` | `REG_NAME_0..3` | R | Device name: `'A'`,`'p'`,`'i'`,`'s'` |
+| `0x05`–`0x07` | `REG_HW_MAJOR`, `REG_HW_MINOR`, `REG_FW_PATCH` | R | Versions (compiled in) |
+| `0x08`–`0x09` | `REG_RANGE` | R | Range, little-endian int16 [cm] |
+| `0x0A` | `REG_SIGNAL_STR` | R | LiDAR Lite signal strength (0–255) |
+| `0x0B` | `REG_CONFIG` | R/W | Sensitivity mode [bits 1:0] |
+| `0x0C` | `REG_I2C_ADDR` | W | Write to change I2C address (EEPROM byte 6) |
+| `0x10`–`0x15` | `REG_ACCEL` | R | Accel X/Y/Z, three little-endian int16 values |
+| `0x18`–`0x1D` | `REG_OFFSET` | R | Accel offsets X/Y/Z (EEPROM bytes 0–5) |
 
 ## Housing and cabling
 
