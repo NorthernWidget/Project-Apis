@@ -252,13 +252,15 @@ void loop() {
   uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
   // while(((Stat1 & 0x08) >> 3) != 1 || ((Stat2 & 0x08) >> 3) != 1 || ((Stat2 & 0x80) >> 7) != 1) {
   unsigned long LocalTime = millis();
-  while(((Stat1 & 0x08) >> 3) != 1 || Stat2 != 0xFF && (millis() - LocalTime) < timeoutGlobal) {  //Try to get status from 
+  // Wait until both status registers report ready, or the timeout elapses.
+  // The timeout guards the whole condition (it used to guard only the second
+  // half, so a stuck Stat1 could wait forever). See Project-Apis #22.
+  while((((Stat1 & 0x08) >> 3) != 1 || Stat2 != 0xFF) && (millis() - LocalTime) < timeoutGlobal) {  //Try to get status from 
     Stat1 = readByte(ACCEL_ADR, 0x27);
     Stat2 = readByte(ACCEL_ADR, 0x07);
     delay(1); //DEBUG!
   }
-  if((millis() - LocalTime) < timeoutGlobal) accelFail = true; //Set flag if timeout occoured 
-  else accelFail = false;
+  accelFail = (millis() - LocalTime) >= timeoutGlobal; //Set flag if timeout occoured (was inverted; #22)
 
   // si.i2c_read(false);
   // si.i2c_read(false);
