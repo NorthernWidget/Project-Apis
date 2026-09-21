@@ -34,12 +34,17 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 
 #define BUF_LENABLEGTH 64 //Length of I2C Buffer, verify with documentation
 
-// Firmware and hardware version constants.
-// HW major.minor = PCB revision (v0.1: first fab run 2019-08-14, re-ordered 2023-05-01).
-// FW patch = firmware revision; bump on any behavioral change visible to the library.
-#define FW_HW_MAJOR 0
-#define FW_HW_MINOR 1
+// Firmware patch version: bump on any behavioural change visible to the
+// library. The hardware version lives in Page 0 (EEPROM), written at
+// provisioning; the firmware writes this constant into the served copy of
+// Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
 #define FW_FW_PATCH 0
+
+// Page 0 (identity, 32 bytes) is the top of EEPROM: 0xE0-0xFF on the
+// ATtiny1634's 256-byte EEPROM. Written once by NW-Provision; read at boot.
+#define PAGE0_BASE   (E2END + 1 - 32)
+#define REG_I2C_ADDR 0x1F
+#define ADR_DEFAULT  0x41   // Schema 1 'A'; used when Page 0 byte 0x1F is 0xFF
 
 // #define ADR_ALT 0x41 //Alternative device address
 
@@ -48,20 +53,20 @@ const unsigned long timeoutGlobal = 200; //Time to wait before timing out
 bool lidarFail = false; //Used to indicate failure of Lidar unit
 bool accelFail = false; //Used to indicate failure of on board accelerometer 
 
-volatile uint8_t adr = 0x50; //Use arbitraty address, change using generall call??
+volatile uint8_t adr = ADR_DEFAULT; //I2C address: Page 0 byte 0x1F (EEPROM), or ADR_DEFAULT if unprogrammed
 // const uint8_t ADR_Alt = 0x41; //Alternative device address  //WARNING! When a #define is used instead, problems are caused
 // NOTE: Switching to 0x41 via a solder jumper requires a board revision to
 // add address-selection hardware; no such circuit exists in the current design
 // (JP1 is the MIC2544 current-limit jumper, not an address jumper).
-// EEPROM byte 6 holds a persistent I2C address (written via register 0x0C);
-// read in setup() before Wire.begin(). Falls back to 0x50 if 0xFF (erased).
+// The I2C address is Page 0 byte 0x1F (EEPROM 0xFF), written via register
+// 0x1F; read in setup() before Wire.begin(). Falls back to ADR_DEFAULT if 0xFF.
 
 unsigned int config = 0; //Global config value
 unsigned long period = 100; //Number of ms between sample events for continuious running
 
+// Page 0 (0x00–0x1F) identity is copied from EEPROM at boot (loadPage0);
 // Page 1 (0x20–0x3F) and Page 2 (0x40–0x5F) per NW-Device-Specification
-// Schema 1 (Apis appendix). Page 0 (0x00–0x1F) identity is compiled in for
-// now and moves to EEPROM in the next commit.
+// Schema 1 (Apis appendix).
 //   0x20        Status: bit 0 ready (registers hold a complete reading);
 //               bit 1 LiDAR fault; bit 2 accelerometer fault; bit 7 pan-fault
 //   0x21        Control (writable): bit 0 trigger a reading now (self-clearing);
@@ -95,6 +100,8 @@ unsigned long period = 100; //Number of ms between sample events for continuious
 #define BIT_SLEEP    0x80
 #define FAULT_LIDAR_TIMEOUT 0x02   // chip 0, kind 2
 #define FAULT_ACCEL_NOACK   0x21   // chip 1, kind 1
+#define FAULT_UNIT_RESET    0xE6   // unit (7), kind 6: reset since the controller last wrote Control
+#define FAULT_UNIT_PAGE0    0xE3   // unit (7), kind 3: Page 0 CRC did not match (unprovisioned or corrupt)
 
 // Register array: three 32-byte pages (NW-Device-Specification). Page 0
 // (0x00–0x1F) identity, Page 1 (0x20–0x3F) status and sensor data, Page 2
@@ -103,18 +110,33 @@ unsigned long period = 100; //Number of ms between sample events for continuious
 // are still the pre-Schema-1 map; they move to the Schema 1 layout in the
 // following commits.
 #define REG_SIZE 96
-uint8_t reg[REG_SIZE] = {
-  0,                         // 0x00: status (not ready)
-  'A', 'p', 'i', 's',        // 0x01–0x04: device name
-  FW_HW_MAJOR, FW_HW_MINOR,  // 0x05–0x06: hardware version
-  FW_FW_PATCH                 // 0x07: firmware patch version
-  // 0x08–0x5F: zero-initialised; measurements updated at runtime
-};
+uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Pages 1-2 at runtime
+bool page0Valid = false;      // Page 0 CRC matched what NW-Provision wrote
+
+// CRC-8/SMBUS (poly 0x07, init 0x00), the NW-Device-Specification reference.
+uint8_t crc8(const uint8_t* data, uint8_t len) {
+  uint8_t crc = 0x00;
+  for (uint8_t i = 0; i < len; i++) {
+    crc ^= data[i];
+    for (uint8_t b = 0; b < 8; b++) crc = (crc & 0x80) ? (crc << 1) ^ 0x07 : (crc << 1);
+  }
+  return crc;
+}
+
+// Copy Page 0 from EEPROM into the served register array, check its CRC,
+// then substitute this firmware's patch version at 0x0A and recompute the
+// CRC of the served copy (EEPROM is left as provisioned).
+void loadPage0() {
+  for (uint8_t i = 0; i < 32; i++) reg[i] = EEPROM.read(PAGE0_BASE + i);
+  page0Valid = (crc8(reg, 0x1E) == reg[0x1E]) && reg[0x00] == 0x01;
+  reg[0x0A] = FW_FW_PATCH;
+  reg[0x1E] = crc8(reg, 0x1E);
+}
 
 // Registers a controller may write. Everything else is read-only and writes
 // to it are ignored (NW-Device-Specification, Page 1 rules).
 bool isWritable(uint8_t pos) {
-  return pos == REG_CTRL || pos == REG_CONFIG || pos == 0x0C;   // 0x0C: I2C address until Page 0 moves to EEPROM
+  return pos == REG_CTRL || pos == REG_CONFIG || pos == REG_I2C_ADDR;
 }
 // bool startReading = true; //Flag used to start a new converstion, make a conversion on startup
 // const unsigned int updateRate = 5; //Rate of update
@@ -142,8 +164,8 @@ void setup() {
   // digitalWrite(POWER_SW, HIGH); //Turn on power //DEBUG!
   // delay(500); //DEBUG!
   digitalWrite(POWER_SW, LOW); //Turn off output power //FIX??
-  uint8_t storedAdr = EEPROM.read(6); // Persistent I2C address; 0xFF = not set
-  if (storedAdr != 0xFF) adr = storedAdr;
+  loadPage0();
+  if (reg[REG_I2C_ADDR] != 0xFF) adr = reg[REG_I2C_ADDR]; // Provisioned address; 0xFF = use default
   Wire.begin(adr);  //Begin slave I2C
   Serial.begin(9600);
   // Serial.println("START"); //DEBUG!
@@ -166,6 +188,7 @@ void setup() {
 
   reg[REG_STATUS] = 0; // Not ready: no reading yet
   reg[REG_CTRL] = CHIP_LIDAR | CHIP_ACCEL; // Power-up: every chip selected
+  reg[REG_FAULT] = page0Valid ? FAULT_UNIT_RESET : FAULT_UNIT_PAGE0; // Latched until the controller writes Control
   delay(10);
   digitalWrite(POWER_SW, HIGH); // Turn on power; 680 µF cap charges at ~227 mA
   delay(100); // Wait for cap charge (~15 ms) and LiDAR Lite power-on (~22 ms)
@@ -629,7 +652,7 @@ void receiveEvent(int DataLen)
       if (!isWritable(Pos)) return; //Read-only register: ignore the write
       reg[Pos] = Val; //Set register value
       if (Pos == REG_CTRL) reg[REG_FAULT] = 0; //A control write acknowledges the latched fault
-      if (Pos == 0x0C) EEPROM.write(6, Val); //Persist I2C address; takes effect on next boot
+      if (Pos == REG_I2C_ADDR) EEPROM.update(PAGE0_BASE + REG_I2C_ADDR, Val); //Persist I2C address (compare-before-write); takes effect on next boot
   }
 
   if(DataLen == 1){
