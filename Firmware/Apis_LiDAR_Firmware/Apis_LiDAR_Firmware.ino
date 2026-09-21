@@ -59,26 +59,43 @@ volatile uint8_t adr = 0x50; //Use arbitraty address, change using generall call
 unsigned int config = 0; //Global config value
 unsigned long period = 100; //Number of ms between sample events for continuious running
 
-// I2C register map (32 bytes, indices 0x00–0x1F).
-// Registers not listed are reserved and zero-initialised.
-//   0x00        Status flags. Bit 0 = ready: 0 = booting/LiDAR not yet
-//               initialised, 1 = ready. Set to 0 at startup and whenever power
-//               is cut to the LiDAR; set to 1 after initLiDAR() completes.
-//               The library polls bit 0 (up to 150 ms) so it can exit as soon
-//               as the LiDAR is ready rather than waiting a fixed time.
-//               See: github.com/NorthernWidget/Project-Apis/issues/15
-//   0x01–0x04   ASCII device name: 'A','p','i','s' (statically initialised;
-//               read by library begin() to detect old firmware)
-//   0x05        Hardware version major (FW_HW_MAJOR)
-//   0x06        Hardware version minor (FW_HW_MINOR)
-//   0x07        Firmware patch version (FW_FW_PATCH)
-//   0x08–0x09   Range [cm], little-endian int16
-//   0x0A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
-//   0x0B        config: sensitivity mode bits [1:0], writable by master
-//   0x0C        I2C address, writable; saved to EEPROM byte 6 on write,
-//               takes effect on next boot; falls back to 0x50 if 0xFF
-//   0x10–0x15   Accelerometer X, Y, Z raw, little-endian int16 each
-//   0x18–0x1D   Accelerometer offsets X, Y, Z, little-endian int16 each
+// Page 1 (0x20–0x3F) and Page 2 (0x40–0x5F) per NW-Device-Specification
+// Schema 1 (Apis appendix). Page 0 (0x00–0x1F) identity is compiled in for
+// now and moves to EEPROM in the next commit.
+//   0x20        Status: bit 0 ready (registers hold a complete reading);
+//               bit 1 LiDAR fault; bit 2 accelerometer fault; bit 7 pan-fault
+//   0x21        Control (writable): bit 0 trigger a reading now (self-clearing);
+//               bit 1 measure LiDAR, bit 2 measure accelerometer, on the next
+//               reading (power-up: both set); bit 7 sleep (reserved here; the
+//               firmware clears it — implementation deferred)
+//   0x22–0x23   Reading counter, uint16 little-endian, +1 when ready is set
+//   0x24–0x25   Reserved for counter extension
+//   0x26        Config (writable): sensitivity mode bits [1:0]
+//   0x27        Fault, latched until the controller writes Control:
+//               bits 7–5 chip (0 LiDAR, 1 accelerometer), bits 4–0 kind
+//               (1 no-acknowledge, 2 timeout)
+//   0x28–0x29   Range [cm], little-endian int16
+//   0x2A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
+//   0x30–0x35   Accelerometer X, Y, Z raw, little-endian int16 each
+//   0x40–0x45   Accelerometer offsets X, Y, Z, little-endian int16 each (Page 2)
+#define REG_STATUS   0x20
+#define REG_CTRL     0x21
+#define REG_COUNTER  0x22
+#define REG_CONFIG   0x26
+#define REG_FAULT    0x27
+#define REG_RANGE    0x28
+#define REG_SIGNAL   0x2A
+#define REG_ACCEL    0x30
+#define REG_OFFSET   0x40
+#define BIT_READY    0x01
+#define BIT_PANFAULT 0x80
+#define BIT_TRIGGER  0x01
+#define CHIP_LIDAR   0x02   // control bit 1 = chip 0
+#define CHIP_ACCEL   0x04   // control bit 2 = chip 1
+#define BIT_SLEEP    0x80
+#define FAULT_LIDAR_TIMEOUT 0x02   // chip 0, kind 2
+#define FAULT_ACCEL_NOACK   0x21   // chip 1, kind 1
+
 // Register array: three 32-byte pages (NW-Device-Specification). Page 0
 // (0x00–0x1F) identity, Page 1 (0x20–0x3F) status and sensor data, Page 2
 // (0x40–0x5F) calibration. A controller writes a start address, then reads
@@ -97,7 +114,7 @@ uint8_t reg[REG_SIZE] = {
 // Registers a controller may write. Everything else is read-only and writes
 // to it are ignored (NW-Device-Specification, Page 1 rules).
 bool isWritable(uint8_t pos) {
-  return pos == 0x0B || pos == 0x0C;   // pre-Schema-1: config, I2C address
+  return pos == REG_CTRL || pos == REG_CONFIG || pos == 0x0C;   // 0x0C: I2C address until Page 0 moves to EEPROM
 }
 // bool startReading = true; //Flag used to start a new converstion, make a conversion on startup
 // const unsigned int updateRate = 5; //Rate of update
@@ -147,7 +164,8 @@ void setup() {
   digitalWrite(ENABLE, LOW);
   digitalWrite(MODE_TRIGGER, HIGH); //Configure as pullup
 
-  reg[0] = 0; // Not ready: LiDAR not yet initialised
+  reg[REG_STATUS] = 0; // Not ready: no reading yet
+  reg[REG_CTRL] = CHIP_LIDAR | CHIP_ACCEL; // Power-up: every chip selected
   delay(10);
   digitalWrite(POWER_SW, HIGH); // Turn on power; 680 µF cap charges at ~227 mA
   delay(100); // Wait for cap charge (~15 ms) and LiDAR Lite power-on (~22 ms)
@@ -155,7 +173,6 @@ void setup() {
   si.i2c_init(); //Begin I2C master
   initAccel();
   initLiDAR();
-  reg[0] = 1; // Ready: LiDAR initialised and accepting I2C commands
   digitalWrite(STAT_LED, LOW);  //Blink on statup
   if(!digitalRead(HALL_SWITCH)) {
     updateOffset(offsets); //Clear values (offsets are 0 on startup until read into)
@@ -197,9 +214,13 @@ void loop() {
   // while(digitalRead(7), LOW); //Wait for updated values //DEBUG!
   // readByte(ACCEL_ADR, 0x27);
   // readWord(ACCEL_ADR, OUT_X_ADR);
-  lidarConfig = reg[0x0B] & 0x03; //Pull low two bits from config reg (0x0B) to get Lidar configuration state
+  lidarConfig = reg[REG_CONFIG] & 0x03; //Pull low two bits from Config (0x26) to get Lidar configuration state
+  // A reading begins: clear ready, take the chip selection, consume the trigger.
+  reg[REG_STATUS] &= ~BIT_READY;
+  bool doLidar = reg[REG_CTRL] & CHIP_LIDAR;
+  bool doAccel = reg[REG_CTRL] & CHIP_ACCEL;
+  reg[REG_CTRL] &= ~(BIT_TRIGGER | BIT_SLEEP); // trigger consumed; sleep not implemented
   initLiDAR(); //reinitialize LiDAR after power cycle
-  reg[0] = 1; // Ready: LiDAR initialised and accepting I2C commands
   unsigned long StartTime = millis();  //Measure time from start of measurment 
   uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
   uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
@@ -226,15 +247,28 @@ void loop() {
   // Serial.println(Stat2, BIN); //DEBUG!
   // Serial.print("\n\n"); //Newline return
 
-  int16_t Range = getRange();  //DEBUG! Replace!
+  int16_t Range = -9999;
+  if (doLidar) Range = getRange();  //DEBUG! Replace!
   Serial.print('R'); //Preceed range value
   Serial.println(Range); 
 
-  reg[0] = 0; // Not ready: cutting power to LiDAR
   digitalWrite(ENABLE, LOW);
   digitalWrite(POWER_SW, LOW); //Turn off 5v switched power
   getOffsets(); //Read in offsets
-  getG(true);
+  if (doAccel) getG(true);
+
+  // Reading complete: load status and fault, bump the counter, set ready.
+  // Atomic so a controller's page read never straddles the update.
+  uint8_t status = BIT_READY;
+  if (doLidar && lidarFail) { status |= 0x02; reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT; }
+  if (doAccel && accelFail) { status |= 0x04; reg[REG_FAULT] = FAULT_ACCEL_NOACK; }
+  if (status & 0x7E) status |= BIT_PANFAULT;
+  uint16_t count = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
+  count++;
+  cli();
+  reg[REG_COUNTER] = count & 0xFF; reg[REG_COUNTER + 1] = count >> 8;
+  reg[REG_STATUS] = status;
+  sei();
   // Serial.println(readByte(LIDAR_ADR, 0x0E)); //DEBUG! //READ RSSI
 
   // for(int i = 0; i < 3; i++) {
@@ -243,7 +277,7 @@ void loop() {
   // Serial.println(readByte(ACCEL_ADR, 0x27), BIN); //DEBUG! 
   
   // delay(1000);
-  while((millis() - StartTime) < period) {  //Wait for period rollover 
+  while((millis() - StartTime) < period && !(reg[REG_CTRL] & BIT_TRIGGER)) {  //Wait for period rollover, or a trigger from the controller
     set_sleep_mode(SLEEP_MODE_IDLE);   // sleep mode is set here
     sleep_enable();
     sei();
@@ -346,13 +380,13 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
       Serial.print('Y'); Serial.println(Axis[1] - offsets[1]);
       Serial.print('Z'); Serial.println(Axis[2] - offsets[2]);
 
-      splitAndLoad(0x10, Axis[0]);  //Load accel values
-      splitAndLoad(0x12, Axis[1]);
-      splitAndLoad(0x14, Axis[2]);
+      splitAndLoad(REG_ACCEL, Axis[0]);  //Load accel values
+      splitAndLoad(REG_ACCEL + 2, Axis[1]);
+      splitAndLoad(REG_ACCEL + 4, Axis[2]);
 
-      splitAndLoad(0x18, offsets[0]);  //Load offsets
-      splitAndLoad(0x1A, offsets[1]);
-      splitAndLoad(0x1C, offsets[2]);
+      splitAndLoad(REG_OFFSET, offsets[0]);  //Load offsets (Page 2)
+      splitAndLoad(REG_OFFSET + 2, offsets[1]);
+      splitAndLoad(REG_OFFSET + 4, offsets[2]);
     }
   }
 
@@ -417,20 +451,20 @@ int16_t getRange()  //FIX! add range constraint??
   while((millis() - LocalTime) < timeoutGlobal && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
   if((millis() - LocalTime) < timeoutGlobal) {  //If timeout has NOT occoured, read as normal
     Data = readWordLE(LIDAR_ADR, 0x0F);
-    splitAndLoad(0x08, Data);
+    splitAndLoad(REG_RANGE, Data);
     // Read signal strength from LiDAR Lite reg 0x0E directly (no auto-increment bit)
     sendCommand(LIDAR_ADR, 0x0E);
     si.i2c_stop();
     si.i2c_start((LIDAR_ADR << 1) | READ);
-    reg[0x0A] = si.i2c_read(false);
+    reg[REG_SIGNAL] = si.i2c_read(false);
     si.i2c_stop();
     lidarFail = false;  //Clear failure flag
   }
   else {  //Otherwise set failure flag and set out of range data value
     lidarFail = true;
     Data = -9999;
-    splitAndLoad(0x08, Data);
-    reg[0x0A] = 0;
+    splitAndLoad(REG_RANGE, Data);
+    reg[REG_SIGNAL] = 0;
   }
 
   return Data;
@@ -594,6 +628,7 @@ void receiveEvent(int DataLen)
       uint8_t Val = Wire.read();
       if (!isWritable(Pos)) return; //Read-only register: ignore the write
       reg[Pos] = Val; //Set register value
+      if (Pos == REG_CTRL) reg[REG_FAULT] = 0; //A control write acknowledges the latched fault
       if (Pos == 0x0C) EEPROM.write(6, Val); //Persist I2C address; takes effect on next boot
   }
 
