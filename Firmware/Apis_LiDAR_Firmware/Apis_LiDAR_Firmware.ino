@@ -43,12 +43,12 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 
 // #define ADR_ALT 0x41 //Alternative device address
 
-const unsigned long GlobalTimeout = 200; //Time to wait before timing out
+const unsigned long timeoutGlobal = 200; //Time to wait before timing out
 
-bool LidarFail = false; //Used to indicate failure of Lidar unit
-bool AccelFail = false; //Used to indicate failure of on board accelerometer 
+bool lidarFail = false; //Used to indicate failure of Lidar unit
+bool accelFail = false; //Used to indicate failure of on board accelerometer 
 
-volatile uint8_t ADR = 0x50; //Use arbitraty address, change using generall call??
+volatile uint8_t adr = 0x50; //Use arbitraty address, change using generall call??
 // const uint8_t ADR_Alt = 0x41; //Alternative device address  //WARNING! When a #define is used instead, problems are caused
 // NOTE: Switching to 0x41 via a solder jumper requires a board revision to
 // add address-selection hardware; no such circuit exists in the current design
@@ -56,14 +56,14 @@ volatile uint8_t ADR = 0x50; //Use arbitraty address, change using generall call
 // EEPROM byte 6 holds a persistent I2C address (written via register 0x0C);
 // read in setup() before Wire.begin(). Falls back to 0x50 if 0xFF (erased).
 
-unsigned int Config = 0; //Global config value
-unsigned long Period = 100; //Number of ms between sample events for continuious running
+unsigned int config = 0; //Global config value
+unsigned long period = 100; //Number of ms between sample events for continuious running
 
 // I2C register map (32 bytes, indices 0x00–0x1F).
 // Registers not listed are reserved and zero-initialised.
 //   0x00        Status flags. Bit 0 = ready: 0 = booting/LiDAR not yet
 //               initialised, 1 = ready. Set to 0 at startup and whenever power
-//               is cut to the LiDAR; set to 1 after InitLiDAR() completes.
+//               is cut to the LiDAR; set to 1 after initLiDAR() completes.
 //               The library polls bit 0 (up to 150 ms) so it can exit as soon
 //               as the LiDAR is ready rather than waiting a fixed time.
 //               See: github.com/NorthernWidget/Project-Apis/issues/15
@@ -74,38 +74,38 @@ unsigned long Period = 100; //Number of ms between sample events for continuious
 //   0x07        Firmware patch version (FW_FW_PATCH)
 //   0x08–0x09   Range [cm], little-endian int16
 //   0x0A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
-//   0x0B        Config: sensitivity mode bits [1:0], writable by master
+//   0x0B        config: sensitivity mode bits [1:0], writable by master
 //   0x0C        I2C address, writable; saved to EEPROM byte 6 on write,
 //               takes effect on next boot; falls back to 0x50 if 0xFF
 //   0x10–0x15   Accelerometer X, Y, Z raw, little-endian int16 each
 //   0x18–0x1D   Accelerometer offsets X, Y, Z, little-endian int16 each
-uint8_t Reg[32] = {
+uint8_t reg[32] = {
   0,                         // 0x00: status (not ready)
   'A', 'p', 'i', 's',        // 0x01–0x04: device name
   FW_HW_MAJOR, FW_HW_MINOR,  // 0x05–0x06: hardware version
   FW_FW_PATCH                 // 0x07: firmware patch version
   // 0x08–0x1F: zero-initialised; measurements updated at runtime
 };
-// bool StartSample = true; //Flag used to start a new converstion, make a conversion on startup
-// const unsigned int UpdateRate = 5; //Rate of update
+// bool startReading = true; //Flag used to start a new converstion, make a conversion on startup
+// const unsigned int updateRate = 5; //Rate of update
 
 SlowSoftI2CMaster si = SlowSoftI2CMaster(PIN_A2, PIN_A3, true);  //Initialize software I2C
 
-volatile bool StopFlag = false; //Used to indicate a stop condition 
-volatile uint8_t RegID = 0; //Used to denote which register will be read from
-volatile bool RepeatedStart = false; //Used to show if the start was repeated or not
+volatile bool stopFlag = false; //Used to indicate a stop condition 
+volatile uint8_t regID = 0; //Used to denote which register will be read from
+volatile bool repeatedStart = false; //Used to show if the start was repeated or not
 
-int16_t Offsets[3] = {0};  //X,Y,Z acceleration offsets to zero the angle of the device 
-int16_t AccelVals[3] = {0}; //Global storage for acceleration data values to be shared between EEPROM functions and getter functions 
+int16_t offsets[3] = {0};  //X,Y,Z acceleration offsets to zero the angle of the device 
+int16_t accelVals[3] = {0}; //Global storage for acceleration data values to be shared between EEPROM functions and getter functions 
 
-bool SwitchLatch = false;  //Latching functionality control for Hall effect switch 
-uint8_t LiDAR_Config = 0; //Use default config 
+bool switchLatch = false;  //Latching functionality control for Hall effect switch 
+uint8_t lidarConfig = 0; //Use default config 
 
 void setup() {
   // Serial.begin(115200); //DEBUG!
   // Serial.println("begin"); //DEBUG!
   // pinMode(ADR_SEL_PIN, INPUT_PULLUP);
-  // if(!digitalRead(ADR_SEL_PIN)) ADR = ADR_Alt; //If solder jumper is bridged, use alternate address //DEBUG!
+  // if(!digitalRead(ADR_SEL_PIN)) adr = ADR_Alt; //If solder jumper is bridged, use alternate address //DEBUG!
   // NOTE: ADR_SEL_PIN is not defined or wired in the current board revision.
   pinMode(STAT_LED, OUTPUT);
   digitalWrite(STAT_LED, HIGH);
@@ -114,11 +114,11 @@ void setup() {
   // delay(500); //DEBUG!
   digitalWrite(POWER_SW, LOW); //Turn off output power //FIX??
   uint8_t storedAdr = EEPROM.read(6); // Persistent I2C address; 0xFF = not set
-  if (storedAdr != 0xFF) ADR = storedAdr;
-  Wire.begin(ADR);  //Begin slave I2C
+  if (storedAdr != 0xFF) adr = storedAdr;
+  Wire.begin(adr);  //Begin slave I2C
   Serial.begin(9600);
   // Serial.println("START"); //DEBUG!
-  // EEPROM.write(0, ADR);
+  // EEPROM.write(0, adr);
 
   //Setup I2C slave
   Wire.onAddrReceive(addressEvent); // register event
@@ -135,19 +135,19 @@ void setup() {
   digitalWrite(ENABLE, LOW);
   digitalWrite(MODE_TRIGGER, HIGH); //Configure as pullup
 
-  Reg[0] = 0; // Not ready: LiDAR not yet initialised
+  reg[0] = 0; // Not ready: LiDAR not yet initialised
   delay(10);
   digitalWrite(POWER_SW, HIGH); // Turn on power; 680 µF cap charges at ~227 mA
   delay(100); // Wait for cap charge (~15 ms) and LiDAR Lite power-on (~22 ms)
   digitalWrite(ENABLE, HIGH);
   si.i2c_init(); //Begin I2C master
-  InitAccel();
-  InitLiDAR();
-  Reg[0] = 1; // Ready: LiDAR initialised and accepting I2C commands
+  initAccel();
+  initLiDAR();
+  reg[0] = 1; // Ready: LiDAR initialised and accepting I2C commands
   digitalWrite(STAT_LED, LOW);  //Blink on statup
   if(!digitalRead(HALL_SWITCH)) {
-    UpdateOffset(Offsets); //Clear values (offsets are 0 on startup until read into)
-    SwitchLatch = true; //Set latch to prevent override 
+    updateOffset(offsets); //Clear values (offsets are 0 on startup until read into)
+    switchLatch = true; //Set latch to prevent override 
   }
   digitalWrite(STAT_LED, HIGH);
 
@@ -155,23 +155,23 @@ void setup() {
 
 void loop() {
   // static unsigned int Count = 0; //Counter to determine update rate
-  // if(StartSample == true) {
+  // if(startReading == true) {
   //  //Read new values in
-  //  AutoRange_Vis();  //Run auto range
+  //  autoRangeVis();  //Run auto range
   //  delay(800); //Wait for new sample
-  //  SplitAndLoad(0x0B, GetALS()); //Load ALS value
-  //  SplitAndLoad(0x0D, GetWhite()); //Load white value
-  //  SplitAndLoad(0x02, long(GetUV(0))); //Load UVA
-  //  SplitAndLoad(0x07, long(GetUV(1))); //Load UVB
-  //  SplitAndLoad(0x10, GetLuxGain()); //Load lux multiplier 
-  //  SplitAndLoad(0x13, GetADC(0));
-  //  SplitAndLoad(0x15, GetADC(1));
-  //  SplitAndLoad(0x17, GetADC(2));
+  //  splitAndLoad(0x0B, GetALS()); //Load ALS value
+  //  splitAndLoad(0x0D, GetWhite()); //Load white value
+  //  splitAndLoad(0x02, long(GetUV(0))); //Load UVA
+  //  splitAndLoad(0x07, long(GetUV(1))); //Load UVB
+  //  splitAndLoad(0x10, GetLuxGain()); //Load lux multiplier 
+  //  splitAndLoad(0x13, GetADC(0));
+  //  splitAndLoad(0x15, GetADC(1));
+  //  splitAndLoad(0x17, GetADC(2));
 
-  //  StartSample = false; //Clear flag when new values updated  
+  //  startReading = false; //Clear flag when new values updated  
   // }
-  // if(Count++ == UpdateRate) {  //Fix update method??
-  //  StartSample = true; //Set flag if number of updates have rolled over 
+  // if(Count++ == updateRate) {  //Fix update method??
+  //  startReading = true; //Set flag if number of updates have rolled over 
   //  Count = 0;
   // }
 
@@ -183,23 +183,23 @@ void loop() {
   //  si.i2c_stop();
   // }
   // while(digitalRead(7), LOW); //Wait for updated values //DEBUG!
-  // ReadByte(ACCEL_ADR, 0x27);
-  // ReadWord(ACCEL_ADR, OUT_X_ADR);
-  LiDAR_Config = Reg[0x0B] & 0x03; //Pull low two bits from Config reg (0x0B) to get Lidar configuration state
-  InitLiDAR(); //reinitialize LiDAR after power cycle
-  Reg[0] = 1; // Ready: LiDAR initialised and accepting I2C commands
+  // readByte(ACCEL_ADR, 0x27);
+  // readWord(ACCEL_ADR, OUT_X_ADR);
+  lidarConfig = reg[0x0B] & 0x03; //Pull low two bits from config reg (0x0B) to get Lidar configuration state
+  initLiDAR(); //reinitialize LiDAR after power cycle
+  reg[0] = 1; // Ready: LiDAR initialised and accepting I2C commands
   unsigned long StartTime = millis();  //Measure time from start of measurment 
-  uint8_t Stat1 = ReadByte(ACCEL_ADR, 0x27); 
-  uint8_t Stat2 = ReadByte(ACCEL_ADR, 0x07);
+  uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
+  uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
   // while(((Stat1 & 0x08) >> 3) != 1 || ((Stat2 & 0x08) >> 3) != 1 || ((Stat2 & 0x80) >> 7) != 1) {
   unsigned long LocalTime = millis();
-  while(((Stat1 & 0x08) >> 3) != 1 || Stat2 != 0xFF && (millis() - LocalTime) < GlobalTimeout) {  //Try to get status from 
-    Stat1 = ReadByte(ACCEL_ADR, 0x27);
-    Stat2 = ReadByte(ACCEL_ADR, 0x07);
+  while(((Stat1 & 0x08) >> 3) != 1 || Stat2 != 0xFF && (millis() - LocalTime) < timeoutGlobal) {  //Try to get status from 
+    Stat1 = readByte(ACCEL_ADR, 0x27);
+    Stat2 = readByte(ACCEL_ADR, 0x07);
     delay(1); //DEBUG!
   }
-  if((millis() - LocalTime) < GlobalTimeout) AccelFail = true; //Set flag if timeout occoured 
-  else AccelFail = false;
+  if((millis() - LocalTime) < timeoutGlobal) accelFail = true; //Set flag if timeout occoured 
+  else accelFail = false;
 
   // si.i2c_read(false);
   // si.i2c_read(false);
@@ -207,45 +207,45 @@ void loop() {
   // si.i2c_read(false);
   // si.i2c_read(false);
   delay(5); //DEBUG!
-  // while(((ReadByte(ACCEL_ADR, 0x27) & 0x08) >> 3) != 1 || (digitalRead(7) == LOW)); //Wait for updated values
+  // while(((readByte(ACCEL_ADR, 0x27) & 0x08) >> 3) != 1 || (digitalRead(7) == LOW)); //Wait for updated values
 
   // Serial.println("START"); //DEBUG!
   // Serial.println(Stat1, BIN); //DEBUG! 
   // Serial.println(Stat2, BIN); //DEBUG!
   // Serial.print("\n\n"); //Newline return
 
-  int16_t Range = GetRange();  //DEBUG! Replace!
+  int16_t Range = getRange();  //DEBUG! Replace!
   Serial.print('R'); //Preceed range value
   Serial.println(Range); 
 
-  Reg[0] = 0; // Not ready: cutting power to LiDAR
+  reg[0] = 0; // Not ready: cutting power to LiDAR
   digitalWrite(ENABLE, LOW);
   digitalWrite(POWER_SW, LOW); //Turn off 5v switched power
-  GetOffsets(); //Read in offsets
-  GetG(true);
-  // Serial.println(ReadByte(LIDAR_ADR, 0x0E)); //DEBUG! //READ RSSI
+  getOffsets(); //Read in offsets
+  getG(true);
+  // Serial.println(readByte(LIDAR_ADR, 0x0E)); //DEBUG! //READ RSSI
 
   // for(int i = 0; i < 3; i++) {
-  //  Serial.println(GetG(i));
+  //  Serial.println(getG(i));
   // }
-  // Serial.println(ReadByte(ACCEL_ADR, 0x27), BIN); //DEBUG! 
+  // Serial.println(readByte(ACCEL_ADR, 0x27), BIN); //DEBUG! 
   
   // delay(1000);
-  while((millis() - StartTime) < Period) {  //Wait for period rollover 
+  while((millis() - StartTime) < period) {  //Wait for period rollover 
     set_sleep_mode(SLEEP_MODE_IDLE);   // sleep mode is set here
     sleep_enable();
     sei();
     sleep_cpu();
     
 
-    if(!digitalRead(HALL_SWITCH) && !SwitchLatch) {  //Only run update if switch is not lauched previously (new application of trigger)
-      SwitchLatch = true; //latch switch until toggle of state
+    if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of trigger)
+      switchLatch = true; //latch switch until toggle of state
       digitalWrite(STAT_LED, HIGH); //Turn on status LED while latched 
-      GetG(false); //Get new acclerometer values
-      UpdateOffset(AccelVals);
+      getG(false); //Get new acclerometer values
+      updateOffset(accelVals);
     }
     if(digitalRead(HALL_SWITCH)) {
-      SwitchLatch = false; //If switch is high, back to default state, reset latch 
+      switchLatch = false; //If switch is high, back to default state, reset latch 
       digitalWrite(STAT_LED, LOW); //Turn off stat LED once latch is cleared 
     }
     // if(Serial.available() > 0) {  //FIX add serial control??
@@ -261,11 +261,11 @@ void loop() {
   // while(Serial.available() < 1 && digitalRead())
 }
 
-// float GetAngle(uint8_t Axis)
+// float getAngle(uint8_t Axis)
 // {
-//  float ValX = GetG(0); //Used to get g values
-//  float ValY = GetG(1);
-//  float ValZ = GetG(2);
+//  float ValX = getG(0); //Used to get g values
+//  float ValY = getG(1);
+//  float ValZ = getG(2);
 //   float Val = 0;
 //   switch(Axis) {
 //     case(0):
@@ -288,25 +288,25 @@ void loop() {
 //   return Val; 
 // }
 
-uint8_t InitAccel() 
+uint8_t initAccel() 
 {
-  // WriteByte(ACCEL_ADR, CTRL_REG1_ADR, 0x07);
-  WriteByte(ACCEL_ADR, CTRL_REG1_ADR, 0x77); //Set for 100Hz output data rate //FIX! Set to low power initally??
-  WriteByte(ACCEL_ADR, CTRL_REG4_ADR, 0x88); //Turn on high resolution mode //FIX! Setup to use self text
-  WriteByte(ACCEL_ADR, CTRL_REG3_ADR, 0x10);
-  WriteByte(ACCEL_ADR, TEMP_CFG_REG_ADR, 0x80);
+  // writeByte(ACCEL_ADR, CTRL_REG1_ADR, 0x07);
+  writeByte(ACCEL_ADR, CTRL_REG1_ADR, 0x77); //Set for 100Hz output data rate //FIX! Set to low power initally??
+  writeByte(ACCEL_ADR, CTRL_REG4_ADR, 0x88); //Turn on high resolution mode //FIX! Setup to use self text
+  writeByte(ACCEL_ADR, CTRL_REG3_ADR, 0x10);
+  writeByte(ACCEL_ADR, TEMP_CFG_REG_ADR, 0x80);
 }
 
-float GetG(bool Set)  //FIX! Add offset support //By default set/send data to registers 
+float getG(bool Set)  //FIX! Add offset support //By default set/send data to registers 
 { 
   // uint8_t AxisADR = OUT_X_ADR + 2*Axis; //Add appropriate offset
-  // int16_t Data = ReadWord(ACCEL_ADR, AxisADR);
+  // int16_t Data = readWord(ACCEL_ADR, AxisADR);
   // return Data*(4.0/4096.0); //FIX! Make fixed integer! 
   // Command |= 0x80; //turn on auto increment //FIX!!! Remove for other I2C transactions 
   bool OutOfRange = false; //Used to test if values are within expected range
   int16_t Axis[3] = {0}; //Initalize variables for x,y,z values
 
-  bool Error = SendCommand(ACCEL_ADR, OUT_X_ADR | 0x80);
+  bool Error = sendCommand(ACCEL_ADR, OUT_X_ADR | 0x80);
   si.i2c_stop(); 
 
   uint8_t Data[6] = {0}; //Init data
@@ -320,27 +320,27 @@ float GetG(bool Set)  //FIX! Add offset support //By default set/send data to re
   }
 
   if(Error == false || OutOfRange) {  //If read error occours 
-    AccelFail = true; //Set flag
+    accelFail = true; //Set flag
     Axis[0] = -9999;
     Axis[1] = -9999;
     Axis[2] = -9999;
   }
   else {  //Otherwise load/send data normally 
-    AccelFail = false; //Clear flag
-    for(int i = 0; i < 3; i++) AccelVals[i] = Axis[i]; //Copy local raw axis data to accel vals
+    accelFail = false; //Clear flag
+    for(int i = 0; i < 3; i++) accelVals[i] = Axis[i]; //Copy local raw axis data to accel vals
 
     if(Set) {  //If sending data is commanded, print data out
-      Serial.print('X'); Serial.println(Axis[0] - Offsets[0]);  //FIX! Optimize to prevent multiple addition 
-      Serial.print('Y'); Serial.println(Axis[1] - Offsets[1]);
-      Serial.print('Z'); Serial.println(Axis[2] - Offsets[2]);
+      Serial.print('X'); Serial.println(Axis[0] - offsets[0]);  //FIX! Optimize to prevent multiple addition 
+      Serial.print('Y'); Serial.println(Axis[1] - offsets[1]);
+      Serial.print('Z'); Serial.println(Axis[2] - offsets[2]);
 
-      SplitAndLoad(0x10, Axis[0]);  //Load accel values
-      SplitAndLoad(0x12, Axis[1]);
-      SplitAndLoad(0x14, Axis[2]);
+      splitAndLoad(0x10, Axis[0]);  //Load accel values
+      splitAndLoad(0x12, Axis[1]);
+      splitAndLoad(0x14, Axis[2]);
 
-      SplitAndLoad(0x18, Offsets[0]);  //Load offsets
-      SplitAndLoad(0x1A, Offsets[1]);
-      SplitAndLoad(0x1C, Offsets[2]);
+      splitAndLoad(0x18, offsets[0]);  //Load offsets
+      splitAndLoad(0x1A, offsets[1]);
+      splitAndLoad(0x1C, offsets[2]);
     }
   }
 
@@ -348,17 +348,17 @@ float GetG(bool Set)  //FIX! Add offset support //By default set/send data to re
   // return Data;
 }
 
-uint8_t InitLiDAR() 
+uint8_t initLiDAR() 
 {
-  // WriteByte(LIDAR_ADR, 0x02, 0x80);
-  // WriteByte(LIDAR_ADR, 0x04, 0x08);
-  // WriteByte(LIDAR_ADR, 0x12, 0x05);
-  // WriteByte(LIDAR_ADR, 0x1C, 0x00);
+  // writeByte(LIDAR_ADR, 0x02, 0x80);
+  // writeByte(LIDAR_ADR, 0x04, 0x08);
+  // writeByte(LIDAR_ADR, 0x12, 0x05);
+  // writeByte(LIDAR_ADR, 0x1C, 0x00);
   uint8_t SigCountMax = 0;
   uint8_t AcqConfigReg = 0;
   uint8_t RefCountMax = 0;
   uint8_t ThresholdBypass = 0;
-  switch(LiDAR_Config) {
+  switch(lidarConfig) {
     case 0: //Default, ballanced
       SigCountMax = 0x80;
       AcqConfigReg = 0x08;
@@ -384,16 +384,16 @@ uint8_t InitLiDAR()
       ThresholdBypass = 0x00;
       break;
   }
-  WriteByte(LIDAR_ADR, 0x02, SigCountMax);
-  WriteByte(LIDAR_ADR, 0x04, AcqConfigReg | 0x01);  //Setup MODE pin to indicate satus 
-  WriteByte(LIDAR_ADR, 0x12, RefCountMax);
-  WriteByte(LIDAR_ADR, 0x1C, ThresholdBypass);
+  writeByte(LIDAR_ADR, 0x02, SigCountMax);
+  writeByte(LIDAR_ADR, 0x04, AcqConfigReg | 0x01);  //Setup MODE pin to indicate satus 
+  writeByte(LIDAR_ADR, 0x12, RefCountMax);
+  writeByte(LIDAR_ADR, 0x1C, ThresholdBypass);
 } 
 
-int16_t GetRange()  //FIX! add range constraint??
+int16_t getRange()  //FIX! add range constraint??
 {
   int16_t Data = 0; //Used to store results
-  WriteByte(LIDAR_ADR, 0x00, 0x01);
+  writeByte(LIDAR_ADR, 0x00, 0x01);
   // si.i2c_start((LIDAR_ADR << 1) | WRITE);
   // si.i2c_write(0x00); 
   // si.i2c_stop();
@@ -401,38 +401,38 @@ int16_t GetRange()  //FIX! add range constraint??
   // si.i2c_write(0x01); //Command to take measurment WITH correction bias 
   // si.i2c_stop();
   unsigned long LocalTime = millis();
-  // while((ReadByte(LIDAR_ADR, 0x01) & 0x01) == 1 && (millis() - LocalTime) < GlobalTimeout && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
-  while((millis() - LocalTime) < GlobalTimeout && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
-  if((millis() - LocalTime) < GlobalTimeout) {  //If timeout has NOT occoured, read as normal
-    Data = ReadWord_LE(LIDAR_ADR, 0x0F);
-    SplitAndLoad(0x08, Data);
+  // while((readByte(LIDAR_ADR, 0x01) & 0x01) == 1 && (millis() - LocalTime) < timeoutGlobal && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
+  while((millis() - LocalTime) < timeoutGlobal && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
+  if((millis() - LocalTime) < timeoutGlobal) {  //If timeout has NOT occoured, read as normal
+    Data = readWordLE(LIDAR_ADR, 0x0F);
+    splitAndLoad(0x08, Data);
     // Read signal strength from LiDAR Lite reg 0x0E directly (no auto-increment bit)
-    SendCommand(LIDAR_ADR, 0x0E);
+    sendCommand(LIDAR_ADR, 0x0E);
     si.i2c_stop();
     si.i2c_start((LIDAR_ADR << 1) | READ);
-    Reg[0x0A] = si.i2c_read(false);
+    reg[0x0A] = si.i2c_read(false);
     si.i2c_stop();
-    LidarFail = false;  //Clear failure flag
+    lidarFail = false;  //Clear failure flag
   }
   else {  //Otherwise set failure flag and set out of range data value
-    LidarFail = true;
+    lidarFail = true;
     Data = -9999;
-    SplitAndLoad(0x08, Data);
-    Reg[0x0A] = 0;
+    splitAndLoad(0x08, Data);
+    reg[0x0A] = 0;
   }
 
   return Data;
 
 }
 
-uint8_t SendCommand(uint8_t Adr, uint8_t Command)  //FIX! Fix error return!
+uint8_t sendCommand(uint8_t Adr, uint8_t Command)  //FIX! Fix error return!
 {
     si.i2c_start((Adr << 1) | WRITE);
     bool Error = si.i2c_write(Command);
     return Error; //DEBUG!
 }
 
-uint8_t WriteWord(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes value to 16 bit register
+uint8_t writeWord(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes value to 16 bit register
 {
   si.i2c_start((Adr << 1) | WRITE);
   si.i2c_write(Command); //Write Command value
@@ -442,7 +442,7 @@ uint8_t WriteWord(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes val
   return Error;  //Invert error so that it will return 0 is works
 }
 
-uint8_t WriteByte(uint8_t Adr, uint8_t Command, uint8_t Data)  //Writes value to 16 bit register
+uint8_t writeByte(uint8_t Adr, uint8_t Command, uint8_t Data)  //Writes value to 16 bit register
 {
   Command |= 0x80; //turn on auto increment //FIX!!! Remove for other I2C transactions 
   si.i2c_start((Adr << 1) | WRITE);
@@ -452,7 +452,7 @@ uint8_t WriteByte(uint8_t Adr, uint8_t Command, uint8_t Data)  //Writes value to
   return Error;  //Invert error so that it will return 0 is works
 }
 
-uint8_t WriteWord_LE(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes value to 16 bit register
+uint8_t writeWordLE(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes value to 16 bit register
 {
   si.i2c_start((Adr << 1) | WRITE);
   si.i2c_write(Command); //Write Command value
@@ -462,22 +462,22 @@ uint8_t WriteWord_LE(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes 
   // return Error;  //Invert error so that it will return 0 is works
 }
 
-// uint8_t WriteConfig(uint8_t Adr, uint8_t NewConfig)
+// uint8_t writeConfig(uint8_t Adr, uint8_t NewConfig)
 // {
 //  si.i2c_start((Adr << 1) | WRITE);
-//  si.i2c_write(CONF_CMD);  //Write command code to Config register
+//  si.i2c_write(CONF_CMD);  //Write command code to config register
 //  uint8_t Error = si.i2c_write(NewConfig);
 //  si.i2c_stop();
 //  if(Error == true) {
-//    Config = NewConfig; //Set global config if write was sucessful 
+//    config = NewConfig; //Set global config if write was sucessful 
 //    return 0;
 //  }
 //  else return -1; //If write failed, return failure condition
 // }
 
-int ReadByte(uint8_t Adr, uint8_t Command, uint8_t Pos) //Send command value, and high/low byte to read, returns desired byte
+int readByte(uint8_t Adr, uint8_t Command, uint8_t Pos) //Send command value, and high/low byte to read, returns desired byte
 {
-  bool Error = SendCommand(Adr, Command);
+  bool Error = sendCommand(Adr, Command);
   si.i2c_rep_start((Adr << 1) | READ);
   uint8_t ValLow = si.i2c_read(false);
   uint8_t ValHigh = si.i2c_read(false);
@@ -491,10 +491,10 @@ int ReadByte(uint8_t Adr, uint8_t Command, uint8_t Pos) //Send command value, an
 
 }
 
-int ReadByte(uint8_t Adr, uint8_t Command) //Send command value, and high/low byte to read, returns desired byte
+int readByte(uint8_t Adr, uint8_t Command) //Send command value, and high/low byte to read, returns desired byte
 {
   Command |= 0x80; //turn on auto increment //FIX!!! Remove for other I2C transactions 
-  bool Error = SendCommand(Adr, Command);
+  bool Error = sendCommand(Adr, Command);
   si.i2c_stop(); //DEBUG!
   si.i2c_start((Adr << 1) | READ);
   uint8_t Val = si.i2c_read(true);  //DEBUG! origionally false 
@@ -510,10 +510,10 @@ int ReadByte(uint8_t Adr, uint8_t Command) //Send command value, and high/low by
 
 }
 
-int16_t ReadWord(uint8_t Adr, uint8_t Command)  //Send command value, returns entire 16 bit word
+int16_t readWord(uint8_t Adr, uint8_t Command)  //Send command value, returns entire 16 bit word
 {
   // Command |= 0x80; //turn on auto increment //FIX!!! Remove for other I2C transactions 
-  bool Error = SendCommand(Adr, Command);
+  bool Error = sendCommand(Adr, Command);
   si.i2c_stop(); 
   // Serial.print("Error = "); Serial.println(Error); //DEBUG!
   // uint8_t Data[6] = {0}; //Init data
@@ -527,9 +527,9 @@ int16_t ReadWord(uint8_t Adr, uint8_t Command)  //Send command value, returns en
   return ((int16_t)(ByteHigh << 8) | (int16_t)ByteLow); //DEBUG!  //FIX! Right shift?? 
 }
 
-int ReadWord_LE(uint8_t Adr, uint8_t Command)  //Send command value, returns entire 16 bit word
+int readWordLE(uint8_t Adr, uint8_t Command)  //Send command value, returns entire 16 bit word
 {
-  bool Error = SendCommand(Adr, Command);
+  bool Error = sendCommand(Adr, Command);
   si.i2c_stop();
   si.i2c_start((Adr << 1) | READ);
   uint8_t ByteHigh = (int8_t) si.i2c_read(false);  //Read in high and low bytes (big endian)
@@ -540,38 +540,38 @@ int ReadWord_LE(uint8_t Adr, uint8_t Command)  //Send command value, returns ent
   return ((ByteHigh << 8) | ByteLow); //DEBUG!
 }
 
-void SplitAndLoad(uint8_t Pos, int16_t Val) //Write 16 bits
+void splitAndLoad(uint8_t Pos, int16_t Val) //Write 16 bits
 {
   uint8_t Len = sizeof(Val);
   for(int i = Pos; i < Pos + Len; i++) {
-    Reg[i] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
+    reg[i] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
   }
 }
 
-void SplitAndLoad(uint8_t Pos, long Val)  //Write 32 bits
+void splitAndLoad(uint8_t Pos, long Val)  //Write 32 bits
 {
   uint8_t Len = sizeof(Val);
   for(int i = Pos; i < Pos + Len; i++) {
-    Reg[i] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
+    reg[i] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
   }
 }
 
 boolean addressEvent(uint16_t address, uint8_t count)
 {
-  RepeatedStart = (count > 0 ? true : false);
+  repeatedStart = (count > 0 ? true : false);
   return true; // send ACK to master
 }
 
 void requestEvent()
 { 
   //Allow for repeated start condition 
-  if(RepeatedStart) {
+  if(repeatedStart) {
     for(int i = 0; i < 2; i++) {
-      Wire.write(Reg[RegID + i]);
+      Wire.write(reg[regID + i]);
     }
   }
   else {
-    Wire.write(Reg[RegID]);
+    Wire.write(reg[regID]);
   }
 }
 
@@ -584,22 +584,22 @@ void receiveEvent(int DataLen)
       uint8_t Pos = Wire.read();
       uint8_t Val = Wire.read();
       //Check for validity of write??
-      Reg[Pos] = Val; //Set register value
+      reg[Pos] = Val; //Set register value
       if (Pos == 0x0C) EEPROM.write(6, Val); //Persist I2C address; takes effect on next boot
   }
 
   if(DataLen == 1){
-    RegID = Wire.read(); //Read in the register ID to be used for subsequent read
+    regID = Wire.read(); //Read in the register ID to be used for subsequent read
   }
 }
 
 void stopEvent() 
 {
-  StopFlag = true;
+  stopFlag = true;
   //End comunication
 }
 
-void UpdateOffset(int16_t *AxisData)  //Pass in array of X,Y,Z offset values
+void updateOffset(int16_t *AxisData)  //Pass in array of X,Y,Z offset values
 {
   // uint8_t Val[4] = {0}; //Blank array to use as temporary storage for desconsturcted float
   // for(int i = 0; i < 3; i++) {
@@ -615,7 +615,7 @@ void UpdateOffset(int16_t *AxisData)  //Pass in array of X,Y,Z offset values
   }
 }
 
-void GetOffsets()
+void getOffsets()
 {
   //Float implementation
   // uint8_t Val[4] = {0}; //Blank array to read bytes into which can be converted to single float
@@ -623,17 +623,17 @@ void GetOffsets()
   //  for(int p = 0; p < 4; p++) {
   //    Val[p] = EEPROM.read(p + i); //Read from desired entry in EEPROM (the pth entry of the ith 4 byte float)
   //  }
-  //  memcpy(&Offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
+  //  memcpy(&offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
   // }
 
   // uint8_t Val[4] = {0}; //Blank array to read bytes into which can be converted to single float
   for(int i = 0; i < 3; i++) {
-      Offsets[i] = (int)((EEPROM.read(2*i) << 8) | EEPROM.read(2*i + 1)); //Read from desired entry in EEPROM and concatonate
-    // memcpy(&Offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
+      offsets[i] = (int)((EEPROM.read(2*i) << 8) | EEPROM.read(2*i + 1)); //Read from desired entry in EEPROM and concatonate
+    // memcpy(&offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
   }
 }
 
-// void ResetOffset()  //Set offset back to zero values
+// void resetOffset()  //Set offset back to zero values
 // {
 //  for(int i = 0; i < 12; i++) {
 //    EEPROM.write(i) = 0; //Clear all utilized EEPROM values
