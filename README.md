@@ -373,23 +373,28 @@ Block 3 (0x18–0x1F)   Integrity + administration
 
 **Page 1 (0x20–0x3F) — Sensor data (SRAM)**
 
+Chip table (index for status fault bits, control chip-select bits, and the fault byte):
+
+| Index | Chip | Measurements |
+|-------|------|--------------|
+| 0 | LiDAR Lite v3 | range, signal strength |
+| 1 | LIS2DH12 accelerometer | X, Y, Z |
+
+Block 0 (0x20–0x27) is the universal block defined by [NW-Device-Specification](https://github.com/NorthernWidget/NW-Device-Specification#page-1--sensor-data): status (ready, per-chip fault bits, pan-fault), control (trigger, chip select, sleep), reading counter, device config byte at 0x26, latched fault code at 0x27. Device data begins at 0x28. Config (0x26): bits 1:0 = LiDAR sensitivity; bits 7:2 reserved.
+
 ```
-Block 0 (0x20–0x27)   LiDAR
-  0x20        Status            bit 0=ready, bit 1=LiDAR fault, bit 2=accel fault,
-                                bit 7=pan-fault
-  0x21        Extended faults (reserved, 0x00)
-  0x22–0x23   Range [cm]        little-endian int16
-  0x24        Signal strength   uint8
-  0x25        Config            sensitivity [bits 1:0], writable
-  0x26–0x27   Reserved
+Block 1 (0x28–0x2F)   LiDAR Lite
+  0x28–0x29   Range [cm]        little-endian int16
+  0x2A        Signal strength   uint8
+  0x2B–0x2F   Reserved
 
-Block 1 (0x28–0x2F)   Accelerometer
-  0x28–0x29   Accel X           little-endian int16
-  0x2A–0x2B   Accel Y           little-endian int16
-  0x2C–0x2D   Accel Z           little-endian int16
-  0x2E–0x2F   Reserved
+Block 2 (0x30–0x37)   Accelerometer
+  0x30–0x31   Accel X           little-endian int16
+  0x32–0x33   Accel Y           little-endian int16
+  0x34–0x35   Accel Z           little-endian int16
+  0x36–0x37   Reserved
 
-Block 2–3 (0x30–0x3F)   Reserved
+Block 3 (0x38–0x3F)   Reserved
 ```
 
 Check bit 0 of 0x20 before using any measurement. If clear, all other Page 1 bytes are stale.
