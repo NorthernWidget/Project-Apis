@@ -76,6 +76,9 @@ volatile bool requestWritten = false;       // set by receiveEvent() on a write 
 unsigned long lidarLastReading = 0;         // millis() of the last reading while powered
 const unsigned long lidarBurstTimeout = 2000; // ms without a trigger before a burst is abandoned (fault fallback)
 uint8_t lidarConfigApplied = 0xFF;          // Config bits last written to the LiDAR
+uint8_t lidarInitFail = 0;                  // fault code if the last power-up failed, else 0
+const unsigned long lidarRailMs = 20;       // rail ramp before enable: 680 uF via the MIC2544 at ~227 mA is ~15 ms
+const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after enable (manual: ~22 ms)
 
 // Page 0 (0x00–0x1F) identity is copied from EEPROM at boot (loadPage0);
 // Page 1 (0x20–0x3F) and Page 2 (0x40–0x5F) per NW-Device-Specification
@@ -113,6 +116,8 @@ uint8_t lidarConfigApplied = 0xFF;          // Config bits last written to the L
 #define CHIP_ACCEL   0x04   // control bit 2 = chip 1
 #define BIT_SLEEP    0x80
 #define FAULT_LIDAR_TIMEOUT 0x02   // chip 0, kind 2
+#define FAULT_LIDAR_NOACK   0x01   // chip 0, kind 1: never acknowledged after power-up
+#define FAULT_LIDAR_NOTINIT 0x05   // chip 0, kind 5: acknowledged but never reported healthy
 #define FAULT_ACCEL_NOACK   0x21   // chip 1, kind 1
 #define FAULT_UNIT_RESET    0xE6   // unit (7), kind 6: reset since the controller last wrote Control
 #define FAULT_UNIT_PAGE0    0xE3   // unit (7), kind 3: Page 0 CRC did not match (unprovisioned or corrupt)
@@ -313,6 +318,7 @@ void loop() {
 
   int16_t Range = -9999;
   if (doLidar && lidarOn) Range = getRange();  //DEBUG! Replace!
+  if (doLidar && !lidarOn) { splitAndLoad(REG_RANGE, -9999); reg[REG_SIGNAL] = 0; } // power-up failed
   Serial.print('R'); //Preceed range value
   Serial.println(Range); 
   getOffsets(); //Read in offsets
@@ -321,7 +327,8 @@ void loop() {
   // Reading complete: load status and fault, bump the counter, set ready.
   // Atomic so a controller's page read never straddles the update.
   uint8_t status = BIT_READY;
-  if (doLidar && lidarFail) { status |= 0x02; reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT; }
+  if (doLidar && lidarInitFail) { status |= 0x02; reg[REG_FAULT] = lidarInitFail; }
+  else if (doLidar && lidarFail) { status |= 0x02; reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT; }
   if (doAccel && accelFail) { status |= 0x04; reg[REG_FAULT] = FAULT_ACCEL_NOACK; }
   if (status & 0x7E) status |= BIT_PANFAULT;
   uint16_t count = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
@@ -428,13 +435,37 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
 
 void lidarPowerUp()
 {
+  // Readiness by register, not by clock: after the rail ramp and enable, poll for an
+  // I2C acknowledge and then the health flag (STATUS 0x01 bit 5: reference and
+  // receiver bias operational). One retry toggles enable after a further rail
+  // wait (enable must follow the ramp); a second failure latches a fault.
   digitalWrite(POWER_SW, HIGH); // Turn on 5v switched power; 680 uF cap charges at ~227 mA
-  delay(100); // Wait for cap charge (~15 ms) and LiDAR Lite power-on (~22 ms)
-  digitalWrite(ENABLE, HIGH); //NOTE: MUST toggle enable after voltage ramp to ensure effective measurment 
-  initLiDAR();
-  lidarConfigApplied = lidarConfig;
-  lidarOn = true;
-  lidarLastReading = millis();
+  lidarInitFail = 0;
+  for (uint8_t attempt = 0; attempt < 2; attempt++) {
+    delay(lidarRailMs);
+    digitalWrite(ENABLE, HIGH); //NOTE: MUST toggle enable after voltage ramp to ensure effective measurment 
+    unsigned long t0 = millis();
+    bool acked = false;
+    while ((millis() - t0) < lidarBootTimeout) {
+      if (si.i2c_start((LIDAR_ADR << 1) | WRITE)) {
+        si.i2c_stop();
+        acked = true;
+        int st = readByte(LIDAR_ADR, 0x01);
+        if (st >= 0 && (st & 0x20)) { // healthy
+          initLiDAR();
+          lidarConfigApplied = lidarConfig;
+          lidarOn = true;
+          lidarLastReading = millis();
+          return;
+        }
+      }
+      else si.i2c_stop();
+      delay(1);
+    }
+    lidarInitFail = acked ? FAULT_LIDAR_NOTINIT : FAULT_LIDAR_NOACK;
+    digitalWrite(ENABLE, LOW); // retry once
+  }
+  lidarPowerDown();
 }
 
 void lidarPowerDown()
