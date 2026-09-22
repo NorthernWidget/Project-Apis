@@ -65,7 +65,17 @@ volatile uint8_t adr = ADR_DEFAULT; //I2C address: Page 0 byte 0x1F (EEPROM), or
 // 0x1F; read in setup() before Wire.begin(). Falls back to ADR_DEFAULT if 0xFF.
 
 unsigned int config = 0; //Global config value
-unsigned long period = 100; //Number of ms between sample events for continuious running
+// On-demand run model (NW-Device-Specification, Apis appendix): the unit idles until a
+// trigger. The LiDAR is powered only while readings are being taken, per the
+// readings-requested word (0x24-0x25): up at the first trigger, down when the
+// requested count is done. No idle timer; a burst that stalls is abandoned.
+bool lidarOn = false;                       // LiDAR powered and configured
+uint16_t requested = 0;                     // readings-requested word, latched at the first trigger after a write
+uint16_t requestBase = 0;                   // reading counter when the request was latched (internal, not a register)
+volatile bool requestWritten = false;       // set by receiveEvent() on a write to 0x24/0x25
+unsigned long lidarLastReading = 0;         // millis() of the last reading while powered
+const unsigned long lidarBurstTimeout = 2000; // ms without a trigger before a burst is abandoned (fault fallback)
+uint8_t lidarConfigApplied = 0xFF;          // Config bits last written to the LiDAR
 
 // Page 0 (0x00–0x1F) identity is copied from EEPROM at boot (loadPage0);
 // Page 1 (0x20–0x3F) and Page 2 (0x40–0x5F) per NW-Device-Specification
@@ -89,6 +99,7 @@ unsigned long period = 100; //Number of ms between sample events for continuious
 #define REG_STATUS   0x20
 #define REG_CTRL     0x21
 #define REG_COUNTER  0x22
+#define REG_REQUEST  0x24  // Readings requested, uint16 LE, writable: chips held powered for this many readings
 #define REG_CONFIG   0x26
 #define REG_FAULT    0x27
 #define REG_RANGE    0x28
@@ -139,7 +150,8 @@ void loadPage0() {
 // Registers a controller may write. Everything else is read-only and writes
 // to it are ignored (NW-Device-Specification, Page 1 rules).
 bool isWritable(uint8_t pos) {
-  return pos == REG_CTRL || pos == REG_CONFIG || pos == REG_I2C_ADDR;
+  return pos == REG_CTRL || pos == REG_CONFIG || pos == REG_I2C_ADDR
+      || pos == REG_REQUEST || pos == REG_REQUEST + 1;
 }
 // bool startReading = true; //Flag used to start a new converstion, make a conversion on startup
 // const unsigned int updateRate = 5; //Rate of update
@@ -193,12 +205,9 @@ void setup() {
   reg[REG_CTRL] = CHIP_LIDAR | CHIP_ACCEL; // Power-up: every chip selected
   reg[REG_FAULT] = page0Valid ? FAULT_UNIT_RESET : FAULT_UNIT_PAGE0; // Latched until the controller writes Control
   delay(10);
-  digitalWrite(POWER_SW, HIGH); // Turn on power; 680 µF cap charges at ~227 mA
-  delay(100); // Wait for cap charge (~15 ms) and LiDAR Lite power-on (~22 ms)
-  digitalWrite(ENABLE, HIGH);
   si.i2c_init(); //Begin I2C master
   initAccel();
-  initLiDAR();
+  // The LiDAR stays off until the first trigger (lidarPowerUp()).
   digitalWrite(STAT_LED, LOW);  //Blink on statup
   if(!digitalRead(HALL_SWITCH)) {
     updateOffset(offsets); //Clear values (offsets are 0 on startup until read into)
@@ -240,14 +249,41 @@ void loop() {
   // while(digitalRead(7), LOW); //Wait for updated values //DEBUG!
   // readByte(ACCEL_ADR, 0x27);
   // readWord(ACCEL_ADR, OUT_X_ADR);
+  // Idle until the controller triggers (on-demand only; no free-running cycle).
+  while (!(reg[REG_CTRL] & BIT_TRIGGER)) {
+    set_sleep_mode(SLEEP_MODE_IDLE);   // I2C address match wakes the core
+    sleep_enable();
+    sei();
+    sleep_cpu();
+    if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of magnet)
+      switchLatch = true; //latch switch until toggle of state
+      digitalWrite(STAT_LED, HIGH); //Turn on status LED while latched 
+      getG(false); //Get new acclerometer values
+      updateOffset(accelVals);
+    }
+    if(digitalRead(HALL_SWITCH)) {
+      switchLatch = false; //If switch is high, back to default state, reset latch 
+      digitalWrite(STAT_LED, LOW); //Turn off stat LED once latch is cleared 
+    }
+    if (lidarOn && (millis() - lidarLastReading) > lidarBurstTimeout) {
+      lidarPowerDown(); // burst abandoned: the controller stopped triggering
+      reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT;
+    }
+  }
+  sleep_disable();
   lidarConfig = reg[REG_CONFIG] & 0x03; //Pull low two bits from Config (0x26) to get Lidar configuration state
   // A reading begins: clear ready, take the chip selection, consume the trigger.
   reg[REG_STATUS] &= ~BIT_READY;
   bool doLidar = reg[REG_CTRL] & CHIP_LIDAR;
   bool doAccel = reg[REG_CTRL] & CHIP_ACCEL;
   reg[REG_CTRL] &= ~(BIT_TRIGGER | BIT_SLEEP); // trigger consumed; sleep not implemented
-  initLiDAR(); //reinitialize LiDAR after power cycle
-  unsigned long StartTime = millis();  //Measure time from start of measurment 
+  if (requestWritten) { // a new readings-requested word: count from this reading
+    requestWritten = false;
+    requested = reg[REG_REQUEST] | (reg[REG_REQUEST + 1] << 8);
+    requestBase = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
+  }
+  if (doLidar && !lidarOn) lidarPowerUp();
+  if (lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-burst
   uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
   uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
   // while(((Stat1 & 0x08) >> 3) != 1 || ((Stat2 & 0x08) >> 3) != 1 || ((Stat2 & 0x80) >> 7) != 1) {
@@ -276,12 +312,9 @@ void loop() {
   // Serial.print("\n\n"); //Newline return
 
   int16_t Range = -9999;
-  if (doLidar) Range = getRange();  //DEBUG! Replace!
+  if (doLidar && lidarOn) Range = getRange();  //DEBUG! Replace!
   Serial.print('R'); //Preceed range value
   Serial.println(Range); 
-
-  digitalWrite(ENABLE, LOW);
-  digitalWrite(POWER_SW, LOW); //Turn off 5v switched power
   getOffsets(); //Read in offsets
   if (doAccel) getG(true);
 
@@ -297,42 +330,13 @@ void loop() {
   reg[REG_COUNTER] = count & 0xFF; reg[REG_COUNTER + 1] = count >> 8;
   reg[REG_STATUS] = status;
   sei();
-  // Serial.println(readByte(LIDAR_ADR, 0x0E)); //DEBUG! //READ RSSI
-
-  // for(int i = 0; i < 3; i++) {
-  //  Serial.println(getG(i));
-  // }
-  // Serial.println(readByte(ACCEL_ADR, 0x27), BIN); //DEBUG! 
-  
-  // delay(1000);
-  while((millis() - StartTime) < period && !(reg[REG_CTRL] & BIT_TRIGGER)) {  //Wait for period rollover, or a trigger from the controller
-    set_sleep_mode(SLEEP_MODE_IDLE);   // sleep mode is set here
-    sleep_enable();
-    sei();
-    sleep_cpu();
-    
-
-    if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of trigger)
-      switchLatch = true; //latch switch until toggle of state
-      digitalWrite(STAT_LED, HIGH); //Turn on status LED while latched 
-      getG(false); //Get new acclerometer values
-      updateOffset(accelVals);
-    }
-    if(digitalRead(HALL_SWITCH)) {
-      switchLatch = false; //If switch is high, back to default state, reset latch 
-      digitalWrite(STAT_LED, LOW); //Turn off stat LED once latch is cleared 
-    }
-    // if(Serial.available() > 0) {  //FIX add serial control??
-    //  uint8_t Data1 = Serial.read();
-    //  uint8_t Data2 = Serial.read();
-    //  if(Data2 == 'F') Ctrl = Data1; //If 
-    // }
+  // Power decision: down after a single reading (requested 0 or 1) or once the
+  // requested count is done; otherwise stay powered for the next trigger.
+  if (lidarOn) {
+    uint16_t done = count - requestBase;
+    if (requested <= 1 || done >= requested) lidarPowerDown();
+    else lidarLastReading = millis();
   }
-  sleep_disable();
-  digitalWrite(POWER_SW, HIGH); //Turn on 5v switched power
-  delay(100); //Wait for voltage to stabilize after cap charge 
-  digitalWrite(ENABLE, HIGH); //NOTE: MUST toggle enable after voltage ramp to ensure effective measurment 
-  // while(Serial.available() < 1 && digitalRead())
 }
 
 // float getAngle(uint8_t Axis)
@@ -420,6 +424,24 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
 
 
   // return Data;
+}
+
+void lidarPowerUp()
+{
+  digitalWrite(POWER_SW, HIGH); // Turn on 5v switched power; 680 uF cap charges at ~227 mA
+  delay(100); // Wait for cap charge (~15 ms) and LiDAR Lite power-on (~22 ms)
+  digitalWrite(ENABLE, HIGH); //NOTE: MUST toggle enable after voltage ramp to ensure effective measurment 
+  initLiDAR();
+  lidarConfigApplied = lidarConfig;
+  lidarOn = true;
+  lidarLastReading = millis();
+}
+
+void lidarPowerDown()
+{
+  digitalWrite(ENABLE, LOW);
+  digitalWrite(POWER_SW, LOW); //Turn off 5v switched power
+  lidarOn = false;
 }
 
 uint8_t initLiDAR() 
@@ -657,6 +679,7 @@ void receiveEvent(int DataLen)
       if (!isWritable(Pos)) return; //Read-only register: ignore the write
       reg[Pos] = Val; //Set register value
       if (Pos == REG_CTRL) reg[REG_FAULT] = 0; //A control write acknowledges the latched fault
+      if (Pos == REG_REQUEST || Pos == REG_REQUEST + 1) requestWritten = true; //Latched at the next trigger
       if (Pos == REG_I2C_ADDR) EEPROM.update(PAGE0_BASE + REG_I2C_ADDR, Val); //Persist I2C address (compare-before-write); takes effect on next boot
   }
 
