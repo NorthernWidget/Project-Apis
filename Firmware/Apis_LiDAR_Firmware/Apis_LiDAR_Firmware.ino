@@ -520,7 +520,7 @@ uint8_t initLiDAR()
 int16_t getRange()  //FIX! add range constraint??
 {
   int16_t Data = 0; //Used to store results
-  writeByte(LIDAR_ADR, 0x00, 0x01);
+  writeByte(LIDAR_ADR, 0x00, 0x01); // ACQ_COMMAND: any non-zero value starts a measurement (v3HP)
   // si.i2c_start((LIDAR_ADR << 1) | WRITE);
   // si.i2c_write(0x00); 
   // si.i2c_stop();
@@ -529,7 +529,12 @@ int16_t getRange()  //FIX! add range constraint??
   // si.i2c_stop();
   unsigned long LocalTime = millis();
   // while((readByte(LIDAR_ADR, 0x01) & 0x01) == 1 && (millis() - LocalTime) < timeoutGlobal && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
-  while((millis() - LocalTime) < timeoutGlobal && digitalRead(MODE_READ) == LOW); //Wait for updated value or timeout
+  // Wait for the acquisition by polling STATUS (0x01) bit 0 (busy) until it clears:
+  // a level, so an acquisition that finished before the first poll reads done, and
+  // done is correct (the data stays valid until the next measurement concludes).
+  // The mode pin is not used: on this board it is held high through R11 and
+  // cannot indicate busy (Project-Apis #24).
+  while((millis() - LocalTime) < timeoutGlobal && (readByte(LIDAR_ADR, 0x01) & 0x01));
   if((millis() - LocalTime) < timeoutGlobal) {  //If timeout has NOT occoured, read as normal
     Data = readWordLE(LIDAR_ADR, 0x0F);
     splitAndLoad(REG_RANGE, Data);
