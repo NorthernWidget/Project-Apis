@@ -293,8 +293,12 @@ void loop() {
     requestWritten = false;
     requested = reg[REG_REQUEST] | (reg[REG_REQUEST + 1] << 8);
     requestBase = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
+    lidarInitFail = 0; // a new burst gets a fresh power-up attempt
   }
-  if (doLidar && !lidarOn) lidarPowerUp();
+  // A power-up that failed earlier in this burst is not retried on every trigger:
+  // the remaining readings report the fault at once (a burst on a dead LiDAR
+  // then costs ~10 ms per reading instead of ~440 ms). Single readings retry.
+  if (doLidar && !lidarOn && !lidarInitFail) lidarPowerUp();
   if (lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-burst
   uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
   uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
@@ -348,11 +352,13 @@ void loop() {
   sei();
   // Power decision: down after a single reading (requested 0 or 1) or once the
   // requested count is done; otherwise stay powered for the next trigger.
+  uint16_t done = count - requestBase;
+  bool burstOver = (requested <= 1) || (done >= requested);
   if (lidarOn) {
-    uint16_t done = count - requestBase;
-    if (requested <= 1 || done >= requested) lidarPowerDown();
+    if (burstOver) lidarPowerDown();
     else lidarLastReading = millis();
   }
+  if (burstOver) lidarInitFail = 0; // the next burst (or single reading) tries the power-up again
 }
 
 // float getAngle(uint8_t Axis)
