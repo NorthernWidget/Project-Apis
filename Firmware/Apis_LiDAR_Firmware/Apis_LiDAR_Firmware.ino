@@ -73,13 +73,13 @@ unsigned int config = 0; //Global config value
 // On-demand run model (NW-Device-Specification, Apis appendix): the unit idles until a
 // trigger. The LiDAR is powered only while readings are being taken, per the
 // readings-requested word (0x24-0x25): up at the first trigger, down when the
-// requested count is done. No idle timer; a burst that stalls is abandoned.
+// requested count is done. No idle timer; a batch that stalls is abandoned.
 bool lidarOn = false;                       // LiDAR powered and configured
 uint16_t requested = 0;                     // readings-requested word, latched at the first trigger after a write
 uint16_t requestBase = 0;                   // reading counter when the request was latched (internal, not a register)
 volatile bool requestWritten = false;       // set by receiveEvent() on a write to 0x24/0x25
 unsigned long lidarLastReading = 0;         // millis() of the last reading while powered
-const unsigned long lidarBurstTimeout = 2000; // ms without a trigger before a burst is abandoned (fault fallback)
+const unsigned long lidarBatchTimeout = 2000; // ms without a trigger before a batch is abandoned (fault fallback)
 uint8_t lidarConfigApplied = 0xFF;          // Config bits last written to the LiDAR
 uint8_t lidarInitFail = 0;                  // fault code if the last power-up failed, else 0
 const unsigned long lidarRailMs = 20;       // rail ramp before enable: 680 uF via the MIC2544 at ~227 mA is ~15 ms
@@ -277,8 +277,8 @@ void loop() {
       switchLatch = false; //If switch is high, back to default state, reset latch 
       digitalWrite(STAT_LED, LOW); //Turn off stat LED once latch is cleared 
     }
-    if (lidarOn && (millis() - lidarLastReading) > lidarBurstTimeout) {
-      lidarPowerDown(); // burst abandoned: the controller stopped triggering
+    if (lidarOn && (millis() - lidarLastReading) > lidarBatchTimeout) {
+      lidarPowerDown(); // batch abandoned: the controller stopped triggering
       reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT;
     }
   }
@@ -293,13 +293,13 @@ void loop() {
     requestWritten = false;
     requested = reg[REG_REQUEST] | (reg[REG_REQUEST + 1] << 8);
     requestBase = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
-    lidarInitFail = 0; // a new burst gets a fresh power-up attempt
+    lidarInitFail = 0; // a new batch gets a fresh power-up attempt
   }
-  // A power-up that failed earlier in this burst is not retried on every trigger:
-  // the remaining readings report the fault at once (a burst on a dead LiDAR
+  // A power-up that failed earlier in this batch is not retried on every trigger:
+  // the remaining readings report the fault at once (a batch on a dead LiDAR
   // then costs ~10 ms per reading instead of ~440 ms). Single readings retry.
   if (doLidar && !lidarOn && !lidarInitFail) lidarPowerUp();
-  if (lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-burst
+  if (lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-batch
   uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
   uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
   // while(((Stat1 & 0x08) >> 3) != 1 || ((Stat2 & 0x08) >> 3) != 1 || ((Stat2 & 0x80) >> 7) != 1) {
@@ -353,12 +353,12 @@ void loop() {
   // Power decision: down after a single reading (requested 0 or 1) or once the
   // requested count is done; otherwise stay powered for the next trigger.
   uint16_t done = count - requestBase;
-  bool burstOver = (requested <= 1) || (done >= requested);
+  bool batchOver = (requested <= 1) || (done >= requested);
   if (lidarOn) {
-    if (burstOver) lidarPowerDown();
+    if (batchOver) lidarPowerDown();
     else lidarLastReading = millis();
   }
-  if (burstOver) lidarInitFail = 0; // the next burst (or single reading) tries the power-up again
+  if (batchOver) lidarInitFail = 0; // the next batch (or single reading) tries the power-up again
 }
 
 // float getAngle(uint8_t Axis)

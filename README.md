@@ -315,7 +315,7 @@ The firmware is on-demand: it idles (core in idle sleep, woken by an I2C address
 4. If the LiDAR chip is selected and powered: writes ACQ_COMMAND (any non-zero value starts a measurement on the v3HP), polls STATUS bit 0 (busy) until clear, and reads the 16-bit range and the signal strength. The LiDAR's mode pin is not used (see issue #24)
 5. If the accelerometer chip is selected: reads the 3-axis accelerometer (LIS3DH) and the stored offsets
 6. Loads status, fault code, and the reading counter, then sets the ready bit, with interrupts disabled so a page read never straddles the update
-7. Powers the LiDAR down if the request was for a single reading (0 or 1) or the requested count is now complete; otherwise leaves it powered for the next trigger. A burst with no trigger for 2 s is abandoned: LiDAR off, fault chip 0 kind 2
+7. Powers the LiDAR down if the request was for a single reading (0 or 1) or the requested count is now complete; otherwise leaves it powered for the next trigger. A batch with no trigger for 2 s is abandoned: LiDAR off, fault chip 0 kind 2
 
 Serial output (range and axes per reading) exists only when the sketch is compiled with `APIS_DEBUG` defined.
 
