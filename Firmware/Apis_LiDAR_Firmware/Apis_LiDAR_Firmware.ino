@@ -29,6 +29,11 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 
 #define LIDAR_ADR 0x62
 
+// Serial output (range and accelerometer axes per reading) only in debug builds:
+// TX/RX are not used in normal operation (ICSP-only), and the prints cost ~25 ms
+// per reading at 9600 baud.
+// #define APIS_DEBUG
+
 #define READ 0x01
 #define WRITE 0x00
 
@@ -187,7 +192,9 @@ void setup() {
   loadPage0();
   if (reg[REG_I2C_ADDR] != 0xFF) adr = reg[REG_I2C_ADDR]; // Provisioned address; 0xFF = use default
   Wire.begin(adr);  //Begin slave I2C
+#ifdef APIS_DEBUG
   Serial.begin(9600);
+#endif
   // Serial.println("START"); //DEBUG!
   // EEPROM.write(0, adr);
 
@@ -319,8 +326,10 @@ void loop() {
   int16_t Range = -9999;
   if (doLidar && lidarOn) Range = getRange();  //DEBUG! Replace!
   if (doLidar && !lidarOn) { splitAndLoad(REG_RANGE, -9999); reg[REG_SIGNAL] = 0; } // power-up failed
+#ifdef APIS_DEBUG
   Serial.print('R'); //Preceed range value
   Serial.println(Range); 
+#endif
   getOffsets(); //Read in offsets
   if (doAccel) getG(true);
 
@@ -415,9 +424,11 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
     for(int i = 0; i < 3; i++) accelVals[i] = Axis[i]; //Copy local raw axis data to accel vals
 
     if(Set) {  //If sending data is commanded, print data out
+#ifdef APIS_DEBUG
       Serial.print('X'); Serial.println(Axis[0] - offsets[0]);  //FIX! Optimize to prevent multiple addition 
       Serial.print('Y'); Serial.println(Axis[1] - offsets[1]);
       Serial.print('Z'); Serial.println(Axis[2] - offsets[2]);
+#endif
 
       splitAndLoad(REG_ACCEL, Axis[0]);  //Load accel values
       splitAndLoad(REG_ACCEL + 2, Axis[1]);
