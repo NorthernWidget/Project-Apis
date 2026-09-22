@@ -303,19 +303,21 @@ The Apis firmware runs on an ATTiny1634 and exposes an I2C register map to the h
 
 The device exposes a flat, byte-addressable virtual address space. The controller writes a 1-byte starting address, then reads up to 32 bytes in one transaction; the firmware auto-increments. Pages are 32-byte aligned.
 
-The map below is what the firmware on `master` implements (firmware patch 1, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
+The map below is what the firmware on `master` implements (firmware patch 2, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
 
 ### Measurement loop
 
-The firmware free-runs: on each cycle (every 100 ms) it
+The firmware is on-demand: it idles (core in idle sleep, woken by an I2C address match or the Hall switch) until the controller writes the trigger bit, then
 
-1. Clears the ready bit, reads the chip-select bits from the control register, and consumes any pending trigger
-2. Powers on the LiDAR Lite via its switchable 5 V supply and re-initialises it with the configured sensitivity
-3. If the LiDAR chip is selected: triggers a range measurement over software I2C and reads the 16-bit range and the signal strength
-4. Powers down the LiDAR Lite
+1. Clears the ready bit, reads the chip-select bits from the control register, and consumes the trigger
+2. If the controller has written the readings-requested word (0x24–0x25) since the last trigger, latches it and notes the reading counter
+3. If the LiDAR chip is selected and the LiDAR is off: closes the 5 V switch, waits ~20 ms for the rail (680 µF through the MIC2544 at its ~227 mA limit), raises enable, and polls the LiDAR for an I2C acknowledge and the health flag in its STATUS register (bit 5) for up to 100 ms; on timeout toggles enable once more; a second failure powers the LiDAR down and latches fault chip 0 kind 1 (no acknowledge) or 5 (not initialised). On success it writes the configured sensitivity
+4. If the LiDAR chip is selected and powered: writes ACQ_COMMAND (any non-zero value starts a measurement on the v3HP), polls STATUS bit 0 (busy) until clear, and reads the 16-bit range and the signal strength. The LiDAR's mode pin is not used (see issue #24)
 5. If the accelerometer chip is selected: reads the 3-axis accelerometer (LIS3DH) and the stored offsets
 6. Loads status, fault code, and the reading counter, then sets the ready bit, with interrupts disabled so a page read never straddles the update
-7. Waits for the rest of the period, or ends the wait early if the controller writes the trigger bit
+7. Powers the LiDAR down if the request was for a single reading (0 or 1) or the requested count is now complete; otherwise leaves it powered for the next trigger. A burst with no trigger for 2 s is abandoned: LiDAR off, fault chip 0 kind 2
+
+Serial output (range and axes per reading) exists only when the sketch is compiled with `APIS_DEBUG` defined.
 
 ### Register map (firmware on `master` — Schema 1)
 
@@ -372,12 +374,14 @@ Block 0 (0x20–0x27)   Universal block (NW-Device-Specification)
                                 the spec, not yet implemented here (cleared by the firmware).
                                 Any write to Control clears the fault byte.
   0x22–0x23   Reading counter   uint16, little-endian, +1 each time ready is set; 0 at boot
-  0x24–0x25   Reserved          for counter extension
+  0x24–0x25   Readings          writable, uint16 little-endian: how many readings the controller will
+              requested         trigger with the LiDAR held powered; 0 (boot value) = one per trigger,
+                                powered down after each. A new write replaces the remainder.
   0x26        Config            writable. bits 1:0 LiDAR sensitivity mode (see below)
   0x27        Fault             latched until the controller writes Control.
                                 bits 7–5 chip (0 LiDAR, 1 accelerometer, 7 unit);
                                 bits 4–0 kind (1 no-acknowledge, 2 timeout, 3 Page 0 checksum,
-                                6 reset since the controller last wrote Control)
+                                5 not initialised, 6 reset since the controller last wrote Control)
 
 Block 1 (0x28–0x2F)   LiDAR Lite
   0x28–0x29   Range [cm]        little-endian int16; -9999 on timeout
