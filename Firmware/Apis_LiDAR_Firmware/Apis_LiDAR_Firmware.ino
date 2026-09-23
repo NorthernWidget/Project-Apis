@@ -46,6 +46,9 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // provisioning; the firmware writes this constant into the served copy of
 // Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
 #define FW_FW_PATCH 5
+#ifndef FW_COMMIT
+#define FW_COMMIT ""  // Set by the build wrapper (NW-Build) as -DFW_COMMIT="a1b2c3d4+"; blank in an IDE build
+#endif
 
 // The stored pages are the top 64 bytes of EEPROM in bus order: Page 0
 // (identity, 32 bytes) at 0xC0-0xDF on the ATtiny1634's 256-byte EEPROM,
@@ -154,6 +157,24 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Page 1 by loadPage1() at boot and after each zero; Page 2 at runtime
 bool page0Valid = false;      // Page 0 CRC matched what NW-Provision wrote
 
+static uint8_t hexNibble(char c) {  // One hex digit to its value; 0 for anything else
+  if(c >= '0' && c <= '9') return c - '0';
+  if(c >= 'a' && c <= 'f') return c - 'a' + 10;
+  if(c >= 'A' && c <= 'F') return c - 'A' + 10;
+  return 0;
+}
+
+// Page 0 Block 3: bytes 0x18-0x1B from the first 8 hex digits of FW_COMMIT, and bit 0
+// of 0x1C when it ends in '+' (a dirty tree). A blank FW_COMMIT leaves the zeros.
+void fwCommitInto(uint8_t* b) {
+  const char* c = FW_COMMIT;
+  uint8_t n = 0;
+  while (c[n]) n++;
+  if(n < 8) return;
+  for (uint8_t i = 0; i < 4; i++) b[i] = (hexNibble(c[2*i]) << 4) | hexNibble(c[2*i + 1]);
+  b[4] = (c[n - 1] == '+') ? 0x01 : 0x00;
+}
+
 // CRC-8/SMBUS (poly 0x07, init 0x00), the NW-Device-Specification reference.
 uint8_t crc8(const uint8_t* data, uint8_t len) {
   uint8_t crc = 0x00;
@@ -171,6 +192,10 @@ void loadPage0() {
   for (uint8_t i = 0; i < 32; i++) reg[i] = EEPROM.read(PAGE0_BASE + i);
   page0Valid = (crc8(reg, 0x1E) == reg[0x1E]) && reg[0x00] == 0x01;
   reg[0x0A] = FW_FW_PATCH;
+  // Build identity (Block 3): the first four bytes of the git commit this firmware was
+  // built from, and bit 0 of 0x1C for a dirty tree, when the build wrapper defined
+  // FW_COMMIT; zeros otherwise (an IDE build). EEPROM keeps zeros there.
+  fwCommitInto(reg + 0x18);
   reg[0x1E] = crc8(reg, 0x1E);
 }
 
