@@ -74,15 +74,15 @@ unsigned int config = 0; //Global config value
 // trigger. The LiDAR is powered only while readings are being taken, per the
 // readings-requested word (0x24-0x25): up at the first trigger, down when the
 // requested count is done. No idle timer; a batch that stalls is abandoned.
-bool lidarOn = false;                       // LiDAR powered and configured
-uint16_t requested = 0;                     // readings-requested word, latched at the first trigger after a write
-uint16_t requestBase = 0;                   // reading counter when the request was latched (internal, not a register)
-volatile bool requestWritten = false;       // set by receiveEvent() on a write to 0x24/0x25
-unsigned long lidarLastReading = 0;         // millis() of the last reading while powered
+bool lidarOn = false; //LiDAR powered and configured
+uint16_t requested = 0; //readings-requested word, latched at the first trigger after a write
+uint16_t requestBase = 0; //reading counter when the request was latched (internal, not a register)
+volatile bool requestWritten = false; //set by receiveEvent() on a write to 0x24/0x25
+unsigned long lidarLastReading = 0; //millis() of the last reading while powered
 const unsigned long lidarBatchTimeout = 2000; // ms without a trigger before a batch is abandoned (fault fallback)
-uint8_t lidarConfigApplied = 0xFF;          // Config bits last written to the LiDAR
-uint8_t lidarInitFail = 0;                  // fault code if the last power-up failed, else 0
-const unsigned long lidarRailMs = 20;       // rail ramp before enable: 680 uF via the MIC2544 at ~227 mA is ~15 ms
+uint8_t lidarConfigApplied = 0xFF; //Config bits last written to the LiDAR
+uint8_t lidarInitFail = 0; //fault code if the last power-up failed, else 0
+const unsigned long lidarRailMs = 20; //rail ramp before enable: 680 uF via the MIC2544 at ~227 mA is ~15 ms
 const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after enable (manual: ~22 ms)
 
 // Page 0 (0x00–0x1F) identity is copied from EEPROM at boot (loadPage0);
@@ -233,7 +233,7 @@ void loop() {
   // static unsigned int Count = 0; //Counter to determine update rate
   // if(startReading == true) {
   //  //Read new values in
-  //  autoRangeVis();  //Run auto range
+  //  AutoRange_Vis();  //Run auto range
   //  delay(800); //Wait for new sample
   //  splitAndLoad(0x0B, GetALS()); //Load ALS value
   //  splitAndLoad(0x0D, GetWhite()); //Load white value
@@ -262,12 +262,12 @@ void loop() {
   // readByte(ACCEL_ADR, 0x27);
   // readWord(ACCEL_ADR, OUT_X_ADR);
   // Idle until the controller triggers (on-demand only; no free-running cycle).
-  while (!(reg[REG_CTRL] & BIT_TRIGGER)) {
+  while(!(reg[REG_CTRL] & BIT_TRIGGER)) {
     set_sleep_mode(SLEEP_MODE_IDLE);   // I2C address match wakes the core
     sleep_enable();
     sei();
     sleep_cpu();
-    if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of magnet)
+    if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of trigger)
       switchLatch = true; //latch switch until toggle of state
       digitalWrite(STAT_LED, HIGH); //Turn on status LED while latched 
       getG(false); //Get new acclerometer values
@@ -277,7 +277,12 @@ void loop() {
       switchLatch = false; //If switch is high, back to default state, reset latch 
       digitalWrite(STAT_LED, LOW); //Turn off stat LED once latch is cleared 
     }
-    if (lidarOn && (millis() - lidarLastReading) > lidarBatchTimeout) {
+    // if(Serial.available() > 0) {  //FIX add serial control??
+    //  uint8_t Data1 = Serial.read();
+    //  uint8_t Data2 = Serial.read();
+    //  if(Data2 == 'F') Ctrl = Data1; //If 
+    // }
+    if(lidarOn && (millis() - lidarLastReading) > lidarBatchTimeout) {
       lidarPowerDown(); // batch abandoned: the controller stopped triggering
       reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT;
     }
@@ -289,7 +294,7 @@ void loop() {
   bool doLidar = reg[REG_CTRL] & CHIP_LIDAR;
   bool doAccel = reg[REG_CTRL] & CHIP_ACCEL;
   reg[REG_CTRL] &= ~(BIT_TRIGGER | BIT_SLEEP); // trigger consumed; sleep not implemented
-  if (requestWritten) { // a new readings-requested word: count from this reading
+  if(requestWritten) { // a new readings-requested word: count from this reading
     requestWritten = false;
     requested = reg[REG_REQUEST] | (reg[REG_REQUEST + 1] << 8);
     requestBase = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
@@ -298,8 +303,8 @@ void loop() {
   // A power-up that failed earlier in this batch is not retried on every trigger:
   // the remaining readings report the fault at once (a batch on a dead LiDAR
   // then costs ~10 ms per reading instead of ~440 ms). Single readings retry.
-  if (doLidar && !lidarOn && !lidarInitFail) lidarPowerUp();
-  if (lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-batch
+  if(doLidar && !lidarOn && !lidarInitFail) lidarPowerUp();
+  if(lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-batch
   uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
   uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
   // while(((Stat1 & 0x08) >> 3) != 1 || ((Stat2 & 0x08) >> 3) != 1 || ((Stat2 & 0x80) >> 7) != 1) {
@@ -328,8 +333,8 @@ void loop() {
   // Serial.print("\n\n"); //Newline return
 
   int16_t Range = -9999;
-  if (doLidar && lidarOn) Range = getRange();  //DEBUG! Replace!
-  if (doLidar && !lidarOn) { splitAndLoad(REG_RANGE, -9999); reg[REG_SIGNAL] = 0; } // power-up failed
+  if(doLidar && lidarOn) Range = getRange();  //DEBUG! Replace!
+  if(doLidar && !lidarOn) { splitAndLoad(REG_RANGE, -9999); reg[REG_SIGNAL] = 0; } // power-up failed
 #ifdef APIS_DEBUG
   Serial.print('R'); //Preceed range value
   Serial.println(Range); 
@@ -340,8 +345,8 @@ void loop() {
   // Reading complete: load status and fault, bump the counter, set ready.
   // Atomic so a controller's page read never straddles the update.
   uint8_t status = BIT_READY;
-  if (doLidar && lidarInitFail) { status |= 0x02; reg[REG_FAULT] = lidarInitFail; }
-  else if (doLidar && lidarFail) { status |= 0x02; reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT; }
+  if(doLidar && lidarInitFail) { status |= 0x02; reg[REG_FAULT] = lidarInitFail; }
+  else if(doLidar && lidarFail) { status |= 0x02; reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT; }
   if (doAccel && accelFail) { status |= 0x04; reg[REG_FAULT] = FAULT_ACCEL_NOACK; }
   if (status & 0x7E) status |= BIT_PANFAULT;
   uint16_t count = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
@@ -350,15 +355,18 @@ void loop() {
   reg[REG_COUNTER] = count & 0xFF; reg[REG_COUNTER + 1] = count >> 8;
   reg[REG_STATUS] = status;
   sei();
+  // Serial.println(readByte(LIDAR_ADR, 0x0E)); //DEBUG! //READ RSSI
+  // Serial.println(readByte(ACCEL_ADR, 0x27), BIN); //DEBUG! 
   // Power decision: down after a single reading (requested 0 or 1) or once the
   // requested count is done; otherwise stay powered for the next trigger.
   uint16_t done = count - requestBase;
   bool batchOver = (requested <= 1) || (done >= requested);
-  if (lidarOn) {
-    if (batchOver) lidarPowerDown();
+  if(lidarOn) {
+    if(batchOver) lidarPowerDown();
     else lidarLastReading = millis();
   }
-  if (batchOver) lidarInitFail = 0; // the next batch (or single reading) tries the power-up again
+  if(batchOver) lidarInitFail = 0; //The next batch (or single reading) tries the power-up again
+  // while(Serial.available() < 1 && digitalRead())
 }
 
 // float getAngle(uint8_t Axis)
@@ -458,17 +466,17 @@ void lidarPowerUp()
   // wait (enable must follow the ramp); a second failure latches a fault.
   digitalWrite(POWER_SW, HIGH); // Turn on 5v switched power; 680 uF cap charges at ~227 mA
   lidarInitFail = 0;
-  for (uint8_t attempt = 0; attempt < 2; attempt++) {
+  for(uint8_t attempt = 0; attempt < 2; attempt++) {
     delay(lidarRailMs);
     digitalWrite(ENABLE, HIGH); //NOTE: MUST toggle enable after voltage ramp to ensure effective measurment 
     unsigned long t0 = millis();
     bool acked = false;
-    while ((millis() - t0) < lidarBootTimeout) {
-      if (si.i2c_start((LIDAR_ADR << 1) | WRITE)) {
+    while((millis() - t0) < lidarBootTimeout) {
+      if(si.i2c_start((LIDAR_ADR << 1) | WRITE)) {
         si.i2c_stop();
         acked = true;
         int st = readByte(LIDAR_ADR, 0x01);
-        if (st >= 0 && (st & 0x20)) { // healthy
+        if(st >= 0 && (st & 0x20)) { // healthy
           initLiDAR();
           lidarConfigApplied = lidarConfig;
           lidarOn = true;
@@ -732,7 +740,7 @@ void receiveEvent(int DataLen)
       if (!isWritable(Pos)) return; //Read-only register: ignore the write
       reg[Pos] = Val; //Set register value
       if (Pos == REG_CTRL) reg[REG_FAULT] = 0; //A control write acknowledges the latched fault
-      if (Pos == REG_REQUEST || Pos == REG_REQUEST + 1) requestWritten = true; //Latched at the next trigger
+      if(Pos == REG_REQUEST || Pos == REG_REQUEST + 1) requestWritten = true; //Latched at the next trigger
       if (Pos == REG_I2C_ADDR) EEPROM.update(PAGE0_BASE + REG_I2C_ADDR, Val); //Persist I2C address (compare-before-write); takes effect on next boot
   }
 
