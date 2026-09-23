@@ -182,13 +182,14 @@ int16_t offsetTemp = 0; //Accelerometer temperature word when the offsets were t
 int16_t accelTemp = 0; //Accelerometer temperature word of the last reading (OUT_ADC3, relative)
 //The zero: samples at the 10 Hz output rate until the standard error of every
 //axis mean is below ZERO_SE_MAX counts, after at least ZERO_MIN_SAMPLES and at
-//most ZERO_MAX_SAMPLES (100 s at 10 Hz), with the magnet held the whole time.
+//most ZERO_MAX_SAMPLES (100 s at 10 Hz). The magnet only starts it.
 #define ZERO_MIN_SAMPLES 32
 #define ZERO_MAX_SAMPLES 1000
 #define ZERO_SE_MAX 0.25 //counts (1 mg per count in high-resolution mode): 0.014 degrees
 int16_t accelVals[3] = {0}; //Global storage for acceleration data values to be shared between EEPROM functions and getter functions 
 
 bool switchLatch = false;  //Latching functionality control for Hall effect switch 
+bool zeroRequested = false; //A zero is due (the magnet was seen at boot)
 uint8_t lidarConfig = 0; //Use default config 
 
 void setup() {
@@ -236,7 +237,7 @@ void setup() {
   // The LiDAR stays off until the first trigger (lidarPowerUp()).
   digitalWrite(STAT_LED, LOW);  //Blink on statup
   if(!digitalRead(HALL_SWITCH)) {
-    updateOffset(offsets, 0); //Clear values (offsets are 0 on startup until read into)
+    zeroRequested = true; //Magnet present at boot: take a new zero once running; it need not stay (it used to clear the offsets instead)
     switchLatch = true; //Set latch to prevent override 
   }
   digitalWrite(STAT_LED, HIGH);
@@ -281,10 +282,11 @@ void loop() {
     sleep_enable();
     sei();
     sleep_cpu();
-    if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of trigger)
-      switchLatch = true; //latch switch until toggle of state
-      digitalWrite(STAT_LED, HIGH); //Turn on status LED while the zero is being taken; off once it is stored (remove the magnet then)
-      if(zeroAccel()) updateOffset(accelVals, accelTemp); //As many samples as the zero needs; nothing stored if the magnet left early
+    if(zeroRequested || (!digitalRead(HALL_SWITCH) && !switchLatch)) {  //Magnet at boot, or newly applied: one application is one zero
+      zeroRequested = false;
+      if(!digitalRead(HALL_SWITCH)) switchLatch = true; //latch switch until toggle of state
+      digitalWrite(STAT_LED, HIGH); //Turn on status LED while the zero is being taken; off once it is stored. The magnet may leave at once
+      if(zeroAccel()) updateOffset(accelVals, accelTemp); //As many samples as the zero needs; nothing stored if the accelerometer failed
       digitalWrite(STAT_LED, LOW);
     }
     if(digitalRead(HALL_SWITCH)) {
@@ -782,13 +784,12 @@ int16_t readAccelTemp() //The LIS3DH OUT_ADC3 word (L, H) as read: the temperatu
   return (int16_t)((High << 8) | Low);
 }
 
-bool zeroAccel() //Average fresh samples into accelVals until the mean of every axis is settled; false if the magnet left first
+bool zeroAccel() //Average fresh samples into accelVals until the mean of every axis is settled; false if the accelerometer failed
 {
   int32_t Sum[3] = {0};
   float SumSq[3] = {0};
   uint16_t n = 0;
   while(n < ZERO_MAX_SAMPLES) {
-    if(digitalRead(HALL_SWITCH)) return false; //Magnet removed: keep the stored zero
     unsigned long LocalTime = millis();
     while(!(readByte(ACCEL_ADR, STATUS_REG_ADR) & 0x08) && (millis() - LocalTime) < timeoutGlobal) delay(1); //A new sample (ZYXDA), one per 100 ms at 10 Hz
     getG(false);
