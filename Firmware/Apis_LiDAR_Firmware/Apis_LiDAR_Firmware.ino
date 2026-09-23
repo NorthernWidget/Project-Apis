@@ -45,13 +45,15 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // library. The hardware version lives in Page 0 (EEPROM), written at
 // provisioning; the firmware writes this constant into the served copy of
 // Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
-#define FW_FW_PATCH 4
+#define FW_FW_PATCH 5
 
 // The stored pages are the top 64 bytes of EEPROM in bus order: Page 0
 // (identity, 32 bytes) at 0xC0-0xDF on the ATtiny1634's 256-byte EEPROM,
 // written once by NW-Provision and read at boot; Page 1 (calibration)
-// directly above it at 0xE0-0xFF. The first six bytes of Page 1 hold the
-// accelerometer offsets (Page 1 Block 0, registers 0x20-0x25).
+// directly above it at 0xE0-0xFF, in bus order (little-endian words), served
+// byte for byte: Block 0 the current zero (offsets X, Y, Z and the
+// temperature word), Blocks 1 and 2 the two zeros before it, 0x38-0x39 the
+// zero generation (patch 5). A blank word (0xFFFF) is served as 0.
 #define PAGE0_BASE   (E2END + 1 - 64)
 #define REG_I2C_ADDR 0x1F
 #define PAGE1_BASE   (E2END + 1 - 32)
@@ -94,6 +96,8 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 // 2026-09-23, spec 4c3b18d: calibration is Page 1, data Page 2).
 //   0x20–0x25   Accelerometer offsets X, Y, Z, little-endian int16 each (Page 1)
 //   0x26–0x27   Accelerometer temperature word when the offsets were taken (Page 1)
+//   0x28–0x2F   The previous zero, same form; 0x30–0x37 the one before that (Page 1, patch 5)
+//   0x38–0x39   Zero generation, uint16 little-endian: zeros stored since manufacture, 0 never (Page 1, patch 5)
 //   0x40        Status: bit 0 ready (registers hold a complete reading);
 //               bit 1 LiDAR fault; bit 2 accelerometer fault; bit 7 pan-fault
 //   0x41        Control (writable): bit 0 trigger a reading now (self-clearing);
@@ -113,8 +117,9 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 //   0x4A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
 //   0x50–0x55   Accelerometer X, Y, Z raw, little-endian int16 each
 //   0x56–0x57   Accelerometer temperature, the LIS3DH OUT_ADC3 word as read (L, H), relative, 1 digit/°C in the high byte
+//   0x58–0x59   Zero generation again, the Page 1 word mirrored so that a reading carries it (patch 5)
 #define REG_OFFSET   0x20
-#define REG_OFFSET_TEMP 0x26
+#define REG_ZERO_GEN 0x38
 #define REG_STATUS   0x40
 #define REG_CTRL     0x41
 #define REG_COUNTER  0x42
@@ -125,6 +130,7 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 #define REG_SIGNAL   0x4A
 #define REG_ACCEL    0x50
 #define REG_ACCEL_TEMP 0x56
+#define REG_ZERO_GEN_MIRROR 0x58
 #define BIT_READY    0x01
 #define BIT_PANFAULT 0x80
 #define BIT_TRIGGER  0x01
@@ -145,7 +151,7 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 // status and sensor data. A controller writes a start address, then reads
 // up to 32 bytes with auto-increment (see requestEvent).
 #define REG_SIZE 96
-uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Page 1 from the EEPROM offsets at each reading; Page 2 at runtime
+uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Page 1 by loadPage1() at boot and after each zero; Page 2 at runtime
 bool page0Valid = false;      // Page 0 CRC matched what NW-Provision wrote
 
 // CRC-8/SMBUS (poly 0x07, init 0x00), the NW-Device-Specification reference.
@@ -162,10 +168,28 @@ uint8_t crc8(const uint8_t* data, uint8_t len) {
 // then substitute this firmware's patch version at 0x0A and recompute the
 // CRC of the served copy (EEPROM is left as provisioned).
 void loadPage0() {
-  for (uint8_t i = 0; i < 64; i++) reg[i] = EEPROM.read(PAGE0_BASE + i);   // the stored half, Page 0 and Page 1, byte for byte
+  for (uint8_t i = 0; i < 32; i++) reg[i] = EEPROM.read(PAGE0_BASE + i);
   page0Valid = (crc8(reg, 0x1E) == reg[0x1E]) && reg[0x00] == 0x01;
   reg[0x0A] = FW_FW_PATCH;
   reg[0x1E] = crc8(reg, 0x1E);
+}
+
+// Copy Page 1 from EEPROM into the served register array byte for byte, with
+// every blank word (0xFFFF, never written) served as 0, and mirror the zero
+// generation into Page 2 (0x58-0x59). Called at boot and after a zero is
+// stored; the copy into the array is atomic so a page read never straddles it.
+void loadPage1() {
+  uint8_t page[32];
+  for(uint8_t i = 0; i < 32; i += 2) {
+    page[i] = EEPROM.read(PAGE1_BASE + i);
+    page[i + 1] = EEPROM.read(PAGE1_BASE + i + 1);
+    if(page[i] == 0xFF && page[i + 1] == 0xFF) { page[i] = 0; page[i + 1] = 0; } //blank word reads as 0
+  }
+  cli();
+  for(uint8_t i = 0; i < 32; i++) reg[REG_OFFSET + i] = page[i];
+  reg[REG_ZERO_GEN_MIRROR] = page[REG_ZERO_GEN - REG_OFFSET];
+  reg[REG_ZERO_GEN_MIRROR + 1] = page[REG_ZERO_GEN - REG_OFFSET + 1];
+  sei();
 }
 
 // Registers a controller may write. Everything else is read-only and writes
@@ -210,6 +234,7 @@ void setup() {
   // delay(500); //DEBUG!
   digitalWrite(POWER_SW, LOW); //Turn off output power //FIX??
   loadPage0();
+  loadPage1();
   if (reg[REG_I2C_ADDR] != 0xFF) adr = reg[REG_I2C_ADDR]; // Provisioned address; 0xFF = use default
   Wire.begin(adr);  //Begin slave I2C
 #ifdef APIS_DEBUG
@@ -469,11 +494,6 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
       splitAndLoad(REG_ACCEL + 2, Axis[1]);
       splitAndLoad(REG_ACCEL + 4, Axis[2]);
       splitAndLoad(REG_ACCEL_TEMP, accelTemp);
-
-      splitAndLoad(REG_OFFSET, offsets[0]);  //Load offsets (Page 1)
-      splitAndLoad(REG_OFFSET + 2, offsets[1]);
-      splitAndLoad(REG_OFFSET + 4, offsets[2]);
-      splitAndLoad(REG_OFFSET_TEMP, offsetTemp);
     }
   }
 
@@ -828,8 +848,10 @@ void latchNotice(uint8_t code) //A notice never overwrites a fault the controlle
   if(!isFaultCode(reg[REG_REPORT])) reg[REG_REPORT] = code;
 }
 
-void updateOffset(int16_t *AxisData, int16_t Temp)  //Pass in array of X,Y,Z offset values and the temperature word they were taken at
+void updateOffset(int16_t *AxisData, int16_t Temp)  //Pass in array of X,Y,Z offset values and the temperature word they were taken at; the two zeros before it are kept
 {
+  //Shift the record first, Block 1 to Block 2 then Block 0 to Block 1, so the new zero lands in Block 0 (patch 5)
+  for(int i = 15; i >= 0; i--) EEPROM.update(PAGE1_BASE + 8 + i, EEPROM.read(PAGE1_BASE + i));
   // uint8_t Val[4] = {0}; //Blank array to use as temporary storage for desconsturcted float
   // for(int i = 0; i < 3; i++) {
   //  memcpy(Val, &AxisData[i], sizeof(float)); //Deconstruct the ith axis value into the temprary Val register 
@@ -839,11 +861,17 @@ void updateOffset(int16_t *AxisData, int16_t Temp)  //Pass in array of X,Y,Z off
   // }
   for(int i = 0; i < 3; i++) {
     // ((EEPROM.read(p + i) << 8) | EEPROM.read(2*i + 1)); //Read from desired entry in EEPROM and concatonate
-    EEPROM.update(PAGE1_BASE + 2*i, AxisData[i] >> 8);  //Write MSB
-    EEPROM.update(PAGE1_BASE + 2*i + 1, AxisData[i] & 0xFF);  //Write LSB
+    EEPROM.update(PAGE1_BASE + 2*i, AxisData[i] & 0xFF);  //Write LSB: bus order, so the page is served byte for byte
+    EEPROM.update(PAGE1_BASE + 2*i + 1, AxisData[i] >> 8);  //Write MSB
   }
-  EEPROM.update(PAGE1_BASE + 6, Temp >> 8); //The temperature the zero was taken at, beside it
-  EEPROM.update(PAGE1_BASE + 7, Temp & 0xFF);
+  EEPROM.update(PAGE1_BASE + 6, Temp & 0xFF); //The temperature the zero was taken at, beside it
+  EEPROM.update(PAGE1_BASE + 7, Temp >> 8);
+  uint16_t generation = EEPROM.read(PAGE1_BASE + 24) | (EEPROM.read(PAGE1_BASE + 25) << 8); //Zeros stored since manufacture
+  if(generation == 0xFFFF) generation = 0; //never written
+  generation++;
+  EEPROM.update(PAGE1_BASE + 24, generation & 0xFF);
+  EEPROM.update(PAGE1_BASE + 25, generation >> 8);
+  loadPage1(); //The served page and the mirror follow at once
 }
 
 void getOffsets()
@@ -859,11 +887,11 @@ void getOffsets()
 
   // uint8_t Val[4] = {0}; //Blank array to read bytes into which can be converted to single float
   for(int i = 0; i < 3; i++) {
-      offsets[i] = (int)((EEPROM.read(PAGE1_BASE + 2*i) << 8) | EEPROM.read(PAGE1_BASE + 2*i + 1)); //Read from desired entry in EEPROM and concatonate
+      offsets[i] = (int)((EEPROM.read(PAGE1_BASE + 2*i + 1) << 8) | EEPROM.read(PAGE1_BASE + 2*i)); //Read from desired entry in EEPROM and concatonate (little-endian)
       if (offsets[i] == -1) offsets[i] = 0; //0xFFFF = never written (fresh Page 1): no offset
     // memcpy(&offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
   }
-  offsetTemp = (int16_t)((EEPROM.read(PAGE1_BASE + 6) << 8) | EEPROM.read(PAGE1_BASE + 7));
+  offsetTemp = (int16_t)((EEPROM.read(PAGE1_BASE + 7) << 8) | EEPROM.read(PAGE1_BASE + 6));
   if(offsetTemp == -1) offsetTemp = 0; //never written
 }
 
