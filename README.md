@@ -303,7 +303,7 @@ The Apis firmware runs on an ATTiny1634 and exposes an I2C register map to the h
 
 The device exposes a flat, byte-addressable virtual address space. The controller writes a 1-byte starting address, then reads up to 32 bytes in one transaction; the firmware auto-increments. Pages are 32-byte aligned.
 
-The map below is what the firmware on `master` implements (firmware patch 4, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
+The map below is what the firmware on `master` implements (firmware patch 5, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
 
 ### Measurement loop
 
@@ -321,7 +321,7 @@ Serial output (range and axes per reading) exists only when the sketch is compil
 
 ### Register map (firmware on `master` – Schema 1)
 
-Three 32-byte pages. Page 0 (identity) is copied from EEPROM at boot; Page 1 (calibration) is served from the offsets held in EEPROM; Page 2 (status and sensor data) lives in SRAM. Pages renumbered 2026-09-23 (spec 4c3b18d): calibration is Page 1 at 0x20, data Page 2 at 0x40.
+Three 32-byte pages. Page 0 (identity) is copied from EEPROM at boot; Page 1 (calibration) is copied from EEPROM byte for byte at boot and again after each zero (a blank word reads as 0); Page 2 (status and sensor data) lives in SRAM. Pages renumbered 2026-09-23 (spec 4c3b18d): calibration is Page 1 at 0x20, data Page 2 at 0x40.
 
 **Page 0 (0x00–0x1F) – Identity (EEPROM 0xC0–0xDF, written by [NW-Provision](https://github.com/NorthernWidget/NW-Provision))**
 
@@ -394,7 +394,8 @@ Block 2 (0x50–0x57)   Accelerometer
   0x54–0x55   Accel Z           little-endian int16
   0x56–0x57   Accel temperature, the LIS3DH OUT_ADC3 word as read (low byte first): relative, 1 digit per °C in the high byte (patch 3)
 
-Block 3 (0x58–0x5F)   Reserved
+Block 3 (0x58–0x5F)   0x58–0x59 zero generation, uint16 LE, the Page 1 value, served with every reading (patch 5)
+  0x5A–0x5F   Reserved
 ```
 
 Check bit 0 of 0x40 before using any measurement; if clear, the data registers are stale. Compare the reading counter with the last value read to know whether a new reading has happened since.
@@ -404,16 +405,18 @@ At boot the Report register reads `0xE6`, "unit: reset since the controller last
 **Page 1 (0x20–0x3F) – Calibration (EEPROM 0xE0–0xFF)**
 
 ```
-Block 0 (0x20–0x27)   Accelerometer offsets
+Block 0 (0x20–0x27)   Current zero: Offset X, Y, Z int16 LE; accel temperature word int16   (as today)
   0x20–0x21   Offset X          little-endian int16
   0x22–0x23   Offset Y          little-endian int16
   0x24–0x25   Offset Z          little-endian int16
   0x26–0x27   Accel temperature word when the offsets were taken (patch 3)
-
-Block 1–3 (0x28–0x3F)   Reserved
+Block 1 (0x28–0x2F)   Previous zero, same form
+Block 2 (0x30–0x37)   The zero before that, same form
+Block 3 (0x38–0x3F)   0x38–0x39 zero generation, uint16 LE: zeros stored since manufacture (0 = never);
+                      0x3A–0x3F reserved
 ```
 
-Offsets are written when the Hall-effect switch is triggered with the magnet (the board's "set level" action). A never-written offset (0xFFFF) reads as zero.
+Offsets are written when the Hall-effect switch is triggered with the magnet (the board's "set level" action). A never-written word (0xFFFF) reads as zero. Storing a zero (patch 5) shifts Block 1 to Block 2 and Block 0 to Block 1, writes the new zero into Block 0, and adds one to the generation, byte by byte with compare-before-write; the served page and the mirror at 0x58 follow at once, and the Report register latches 0x29 (calibration stored) as before. Page 1 is stored in bus order from patch 5 (the earlier patches wrote the words big-endian), so a unit zeroed under patch 3 or 4 needs a new zero after reflashing.
 
 ### Sensitivity modes
 
@@ -527,7 +530,7 @@ Prior to assembly, ensure that you have:
 
 ***Pitch, roll, and Hall-effect calibration location on the assembled unit.*** *The "zero" oval cutout on the lower center of the box face marks where to tap the magnet.*
 
-12. Place the box on a measured flat surface and tap the magnet to the marked location by the Hall Effect sensor. This will appropriately zero the offsets for the sensor and increase its near-horizontal accuracy significantly. This must be done when the sensor is powered. From firmware patch 3 the magnet only starts the zero: tap it at the mark, at boot or at any time, and take it away. The LED lights and stays on while the firmware averages samples at the accelerometer's 10 Hz rate until the mean of every axis has settled (at least 3.2 s, at most 100 s), and goes out when the zero and its temperature are stored. Keep the unit still until then. When connected to a logger, hold the magnet at the mark, hit the "RESET" button (e.g., on a Margay logger), and remove the magnet once the LED is on. Doing this while connected to a computer is recommended in order to see the first reading on the serial monitor and double check that the zeroing/calibration is appropriate. For a convenient magnet holder, you can use our [3D-printable magnetic wand][3Dprint], which holds a small rare-Earth magnet. This may be a generic part, though this [3/8" x 1/8" Neodymium Disk Magnet](https://www.apexmagnets.com/magnets/3-8-x-1-8-disc-neodymium-magnet) works well in our experience.
+12. Place the box on a measured flat surface and tap the magnet to the marked location by the Hall Effect sensor. This will appropriately zero the offsets for the sensor and increase its near-horizontal accuracy significantly. This must be done when the sensor is powered. From firmware patch 3 the magnet only starts the zero: tap it at the mark, at boot or at any time, and take it away. The LED lights and stays on while the firmware averages samples at the accelerometer's 10 Hz rate until the mean of every axis has settled (at least 3.2 s, at most 100 s), and goes out when the zero and its temperature are stored. Keep the unit still until then. From patch 5 the unit keeps the two zeros before the current one, with a count of zeros stored since manufacture that every reading carries, so a logger can tell when a zero was retaken. When connected to a logger, hold the magnet at the mark, hit the "RESET" button (e.g., on a Margay logger), and remove the magnet once the LED is on. Doing this while connected to a computer is recommended in order to see the first reading on the serial monitor and double check that the zeroing/calibration is appropriate. For a convenient magnet holder, you can use our [3D-printable magnetic wand][3Dprint], which holds a small rare-Earth magnet. This may be a generic part, though this [3/8" x 1/8" Neodymium Disk Magnet](https://www.apexmagnets.com/magnets/3-8-x-1-8-disc-neodymium-magnet) works well in our experience.
 
 13. Use the 1/4"-20 hardware to attach the LiDAR Lite box to the mounting plate. The bolts pass through the center holes on the tabs on either side of the box, with their heads towards the box lids.
 
