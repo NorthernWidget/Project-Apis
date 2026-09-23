@@ -11,6 +11,8 @@
 #define CTRL_REG4_ADR 0x23
 #define TEMP_CFG_REG_ADR 0x1F
 #define OUT_X_ADR 0x28 //Low byte
+#define OUT_ADC3_ADR 0x0C //Auxiliary ADC channel 3, low byte: the temperature sensor when TEMP_EN is set
+#define STATUS_REG_ADR 0x27
 #define OUT_Y_ADR 0x2A
 #define OUT_Z_ADR 0x2C
 
@@ -43,7 +45,7 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // library. The hardware version lives in Page 0 (EEPROM), written at
 // provisioning; the firmware writes this constant into the served copy of
 // Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
-#define FW_FW_PATCH 2
+#define FW_FW_PATCH 3
 
 // Page 0 (identity, 32 bytes) is the top of EEPROM: 0xE0-0xFF on the
 // ATtiny1634's 256-byte EEPROM. Written once by NW-Provision; read at boot.
@@ -103,7 +105,9 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 //   0x28–0x29   Range [cm], little-endian int16
 //   0x2A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
 //   0x30–0x35   Accelerometer X, Y, Z raw, little-endian int16 each
+//   0x36–0x37   Accelerometer temperature, the LIS3DH OUT_ADC3 word as read (L, H), relative, 1 digit/°C in the high byte
 //   0x40–0x45   Accelerometer offsets X, Y, Z, little-endian int16 each (Page 2)
+//   0x46–0x47   Accelerometer temperature word when the offsets were taken (Page 2)
 #define REG_STATUS   0x20
 #define REG_CTRL     0x21
 #define REG_COUNTER  0x22
@@ -113,7 +117,9 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 #define REG_RANGE    0x28
 #define REG_SIGNAL   0x2A
 #define REG_ACCEL    0x30
+#define REG_ACCEL_TEMP 0x36
 #define REG_OFFSET   0x40
+#define REG_OFFSET_TEMP 0x46
 #define BIT_READY    0x01
 #define BIT_PANFAULT 0x80
 #define BIT_TRIGGER  0x01
@@ -172,6 +178,14 @@ volatile bool stopFlag = false; //Used to indicate a stop condition
 volatile uint8_t regID = 0; //Used to denote which register will be read from
 
 int16_t offsets[3] = {0};  //X,Y,Z acceleration offsets to zero the angle of the device 
+int16_t offsetTemp = 0; //Accelerometer temperature word when the offsets were taken (Page 2, 0x46); the reference for a drift correction
+int16_t accelTemp = 0; //Accelerometer temperature word of the last reading (OUT_ADC3, relative)
+//The zero: samples at the 10 Hz output rate until the standard error of every
+//axis mean is below ZERO_SE_MAX counts, after at least ZERO_MIN_SAMPLES and at
+//most ZERO_MAX_SAMPLES (100 s at 10 Hz), with the magnet held the whole time.
+#define ZERO_MIN_SAMPLES 32
+#define ZERO_MAX_SAMPLES 1000
+#define ZERO_SE_MAX 0.25 //counts (1 mg per count in high-resolution mode): 0.014 degrees
 int16_t accelVals[3] = {0}; //Global storage for acceleration data values to be shared between EEPROM functions and getter functions 
 
 bool switchLatch = false;  //Latching functionality control for Hall effect switch 
@@ -222,7 +236,7 @@ void setup() {
   // The LiDAR stays off until the first trigger (lidarPowerUp()).
   digitalWrite(STAT_LED, LOW);  //Blink on statup
   if(!digitalRead(HALL_SWITCH)) {
-    updateOffset(offsets); //Clear values (offsets are 0 on startup until read into)
+    updateOffset(offsets, 0); //Clear values (offsets are 0 on startup until read into)
     switchLatch = true; //Set latch to prevent override 
   }
   digitalWrite(STAT_LED, HIGH);
@@ -269,13 +283,12 @@ void loop() {
     sleep_cpu();
     if(!digitalRead(HALL_SWITCH) && !switchLatch) {  //Only run update if switch is not lauched previously (new application of trigger)
       switchLatch = true; //latch switch until toggle of state
-      digitalWrite(STAT_LED, HIGH); //Turn on status LED while latched 
-      getG(false); //Get new acclerometer values
-      updateOffset(accelVals);
+      digitalWrite(STAT_LED, HIGH); //Turn on status LED while the zero is being taken; off once it is stored (remove the magnet then)
+      if(zeroAccel()) updateOffset(accelVals, accelTemp); //As many samples as the zero needs; nothing stored if the magnet left early
+      digitalWrite(STAT_LED, LOW);
     }
     if(digitalRead(HALL_SWITCH)) {
       switchLatch = false; //If switch is high, back to default state, reset latch 
-      digitalWrite(STAT_LED, LOW); //Turn off stat LED once latch is cleared 
     }
     // if(Serial.available() > 0) {  //FIX add serial control??
     //  uint8_t Data1 = Serial.read();
@@ -399,10 +412,10 @@ void loop() {
 uint8_t initAccel() 
 {
   // writeByte(ACCEL_ADR, CTRL_REG1_ADR, 0x07);
-  writeByte(ACCEL_ADR, CTRL_REG1_ADR, 0x77); //Set for 100Hz output data rate //FIX! Set to low power initally??
+  writeByte(ACCEL_ADR, CTRL_REG1_ADR, 0x27); //10 Hz output data rate (5 Hz bandwidth: 0.5 mg rms per sample instead of 3 mg at 400 Hz); was 0x77 //FIX! Set to low power initally??
   writeByte(ACCEL_ADR, CTRL_REG4_ADR, 0x88); //Turn on high resolution mode //FIX! Setup to use self text
   writeByte(ACCEL_ADR, CTRL_REG3_ADR, 0x10);
-  writeByte(ACCEL_ADR, TEMP_CFG_REG_ADR, 0x80);
+  writeByte(ACCEL_ADR, TEMP_CFG_REG_ADR, 0xC0); //ADC and temperature sensor on (was 0x80, ADC only): OUT_ADC3 carries the chip temperature for a drift correction
 }
 
 float getG(bool Set)  //FIX! Add offset support //By default set/send data to registers 
@@ -436,6 +449,7 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
   else {  //Otherwise load/send data normally 
     accelFail = false; //Clear flag
     for(int i = 0; i < 3; i++) accelVals[i] = Axis[i]; //Copy local raw axis data to accel vals
+    accelTemp = readAccelTemp(); //The chip temperature beside the axes, for the drift correction
 
     if(Set) {  //If sending data is commanded, print data out
 #ifdef APIS_DEBUG
@@ -447,10 +461,12 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
       splitAndLoad(REG_ACCEL, Axis[0]);  //Load accel values
       splitAndLoad(REG_ACCEL + 2, Axis[1]);
       splitAndLoad(REG_ACCEL + 4, Axis[2]);
+      splitAndLoad(REG_ACCEL_TEMP, accelTemp);
 
       splitAndLoad(REG_OFFSET, offsets[0]);  //Load offsets (Page 2)
       splitAndLoad(REG_OFFSET + 2, offsets[1]);
       splitAndLoad(REG_OFFSET + 4, offsets[2]);
+      splitAndLoad(REG_OFFSET_TEMP, offsetTemp);
     }
   }
 
@@ -755,7 +771,46 @@ void stopEvent()
   //End comunication
 }
 
-void updateOffset(int16_t *AxisData)  //Pass in array of X,Y,Z offset values
+int16_t readAccelTemp() //The LIS3DH OUT_ADC3 word (L, H) as read: the temperature sensor, relative, 1 digit/°C in the high byte
+{
+  sendCommand(ACCEL_ADR, OUT_ADC3_ADR | 0x80); //auto-increment
+  si.i2c_stop();
+  si.i2c_start((ACCEL_ADR << 1) | READ);
+  uint8_t Low = si.i2c_read(false);
+  uint8_t High = si.i2c_read(false);
+  si.i2c_stop();
+  return (int16_t)((High << 8) | Low);
+}
+
+bool zeroAccel() //Average fresh samples into accelVals until the mean of every axis is settled; false if the magnet left first
+{
+  int32_t Sum[3] = {0};
+  float SumSq[3] = {0};
+  uint16_t n = 0;
+  while(n < ZERO_MAX_SAMPLES) {
+    if(digitalRead(HALL_SWITCH)) return false; //Magnet removed: keep the stored zero
+    unsigned long LocalTime = millis();
+    while(!(readByte(ACCEL_ADR, STATUS_REG_ADR) & 0x08) && (millis() - LocalTime) < timeoutGlobal) delay(1); //A new sample (ZYXDA), one per 100 ms at 10 Hz
+    getG(false);
+    if(accelFail) return false;
+    n++;
+    for(int i = 0; i < 3; i++) { Sum[i] += accelVals[i]; SumSq[i] += (float)accelVals[i]*accelVals[i]; }
+    if(n >= ZERO_MIN_SAMPLES) {
+      bool settled = true;
+      for(int i = 0; i < 3; i++) {
+        float Mean = (float)Sum[i]/n;
+        float Var = (SumSq[i] - n*Mean*Mean)/(n - 1);
+        if(Var < 0) Var = 0;
+        if(sqrt(Var/n) > ZERO_SE_MAX) settled = false; //Standard error of the mean, in counts
+      }
+      if(settled) break;
+    }
+  }
+  for(int i = 0; i < 3; i++) accelVals[i] = (int16_t)((Sum[i] + (Sum[i] >= 0 ? (int32_t)n/2 : -(int32_t)n/2))/(int32_t)n); //Rounded mean
+  return true;
+}
+
+void updateOffset(int16_t *AxisData, int16_t Temp)  //Pass in array of X,Y,Z offset values and the temperature word they were taken at
 {
   // uint8_t Val[4] = {0}; //Blank array to use as temporary storage for desconsturcted float
   // for(int i = 0; i < 3; i++) {
@@ -769,6 +824,8 @@ void updateOffset(int16_t *AxisData)  //Pass in array of X,Y,Z offset values
     EEPROM.update(PAGE2_BASE + 2*i, AxisData[i] >> 8);  //Write MSB
     EEPROM.update(PAGE2_BASE + 2*i + 1, AxisData[i] & 0xFF);  //Write LSB
   }
+  EEPROM.update(PAGE2_BASE + 6, Temp >> 8); //The temperature the zero was taken at, beside it
+  EEPROM.update(PAGE2_BASE + 7, Temp & 0xFF);
 }
 
 void getOffsets()
@@ -788,6 +845,8 @@ void getOffsets()
       if (offsets[i] == -1) offsets[i] = 0; //0xFFFF = never written (fresh Page 2): no offset
     // memcpy(&offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
   }
+  offsetTemp = (int16_t)((EEPROM.read(PAGE2_BASE + 6) << 8) | EEPROM.read(PAGE2_BASE + 7));
+  if(offsetTemp == -1) offsetTemp = 0; //never written
 }
 
 // void resetOffset()  //Set offset back to zero values
