@@ -47,13 +47,14 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
 #define FW_FW_PATCH 4
 
-// Page 0 (identity, 32 bytes) is the top of EEPROM: 0xE0-0xFF on the
-// ATtiny1634's 256-byte EEPROM. Written once by NW-Provision; read at boot.
-#define PAGE0_BASE   (E2END + 1 - 32)
+// The stored pages are the top 64 bytes of EEPROM in bus order: Page 0
+// (identity, 32 bytes) at 0xC0-0xDF on the ATtiny1634's 256-byte EEPROM,
+// written once by NW-Provision and read at boot; Page 1 (calibration)
+// directly above it at 0xE0-0xFF. The first six bytes of Page 1 hold the
+// accelerometer offsets (Page 1 Block 0, registers 0x20-0x25).
+#define PAGE0_BASE   (E2END + 1 - 64)
 #define REG_I2C_ADDR 0x1F
-// Page 2 (calibration) sits immediately below Page 0: 0xC0-0xDF. Its first
-// six bytes hold the accelerometer offsets (Page 2 Block 0, registers 0x40-0x45).
-#define PAGE2_BASE   (E2END + 1 - 64)
+#define PAGE1_BASE   (E2END + 1 - 32)
 #define ADR_DEFAULT  0x41   // Schema 1 'A'; used when Page 0 byte 0x1F is 0xFF
 
 // #define ADR_ALT 0x41 //Alternative device address
@@ -68,18 +69,18 @@ volatile uint8_t adr = ADR_DEFAULT; //I2C address: Page 0 byte 0x1F (EEPROM), or
 // NOTE: Switching to 0x41 via a solder jumper requires a board revision to
 // add address-selection hardware; no such circuit exists in the current design
 // (JP1 is the MIC2544 current-limit jumper, not an address jumper).
-// The I2C address is Page 0 byte 0x1F (EEPROM 0xFF), written via register
+// The I2C address is Page 0 byte 0x1F (EEPROM 0xDF), written via register
 // 0x1F; read in setup() before Wire.begin(). Falls back to ADR_DEFAULT if 0xFF.
 
 unsigned int config = 0; //Global config value
 // On-demand run model (NW-Device-Specification, Apis appendix): the unit idles until a
 // trigger. The LiDAR is powered only while readings are being taken, per the
-// readings-requested word (0x24-0x25): up at the first trigger, down when the
+// readings-requested word (0x44-0x45): up at the first trigger, down when the
 // requested count is done. No idle timer; a batch that stalls is abandoned.
 bool lidarOn = false; //LiDAR powered and configured
 uint16_t requested = 0; //readings-requested word, latched at the first trigger after a write
 uint16_t requestBase = 0; //reading counter when the request was latched (internal, not a register)
-volatile bool requestWritten = false; //set by receiveEvent() on a write to 0x24/0x25
+volatile bool requestWritten = false; //set by receiveEvent() on a write to 0x44/0x45
 unsigned long lidarLastReading = 0; //millis() of the last reading while powered
 const unsigned long lidarBatchTimeout = 2000; // ms without a trigger before a batch is abandoned (fault fallback)
 uint8_t lidarConfigApplied = 0xFF; //Config bits last written to the LiDAR
@@ -88,41 +89,42 @@ const unsigned long lidarRailMs = 20; //rail ramp before enable: 680 uF via the 
 const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after enable (manual: ~22 ms)
 
 // Page 0 (0x00–0x1F) identity is copied from EEPROM at boot (loadPage0);
-// Page 1 (0x20–0x3F) and Page 2 (0x40–0x5F) per NW-Device-Specification
-// Schema 1 (Apis appendix).
-//   0x20        Status: bit 0 ready (registers hold a complete reading);
+// Page 1 (0x20–0x3F) calibration and Page 2 (0x40–0x5F) sensor data per
+// NW-Device-Specification Schema 1 (Apis appendix; pages renumbered
+// 2026-09-23, spec 4c3b18d: calibration is Page 1, data Page 2).
+//   0x20–0x25   Accelerometer offsets X, Y, Z, little-endian int16 each (Page 1)
+//   0x26–0x27   Accelerometer temperature word when the offsets were taken (Page 1)
+//   0x40        Status: bit 0 ready (registers hold a complete reading);
 //               bit 1 LiDAR fault; bit 2 accelerometer fault; bit 7 pan-fault
-//   0x21        Control (writable): bit 0 trigger a reading now (self-clearing);
+//   0x41        Control (writable): bit 0 trigger a reading now (self-clearing);
 //               bit 1 measure LiDAR, bit 2 measure accelerometer, on the next
 //               reading (power-up: both set); bit 7 sleep (reserved here; the
-//               firmware clears it — implementation deferred)
-//   0x22–0x23   Reading counter, uint16 little-endian, +1 when ready is set
-//   0x24–0x25   Reserved for counter extension
-//   0x26        Config (writable): sensitivity mode bits [1:0]
-//   0x27        Report, latched until the controller writes Control: the
+//               firmware clears it; implementation deferred)
+//   0x42–0x43   Reading counter, uint16 little-endian, +1 when ready is set
+//   0x44–0x45   Readings requested, uint16 little-endian (writable)
+//   0x46        Config (writable): sensitivity mode bits [1:0]
+//   0x47        Report, latched until the controller writes Control: the
 //               device's most recent report, a fault (its chip's status bit
 //               is set too) or a notice (no status bit):
 //               bits 7–5 chip (0 LiDAR, 1 accelerometer, 7 the unit), bits 4–0 kind
 //               (1 no-acknowledge, 2 timeout, 5 not initialised, 6 reset,
 //               9 calibration stored, 10 batch abandoned)
-//   0x28–0x29   Range [cm], little-endian int16
-//   0x2A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
-//   0x30–0x35   Accelerometer X, Y, Z raw, little-endian int16 each
-//   0x36–0x37   Accelerometer temperature, the LIS3DH OUT_ADC3 word as read (L, H), relative, 1 digit/°C in the high byte
-//   0x40–0x45   Accelerometer offsets X, Y, Z, little-endian int16 each (Page 2)
-//   0x46–0x47   Accelerometer temperature word when the offsets were taken (Page 2)
-#define REG_STATUS   0x20
-#define REG_CTRL     0x21
-#define REG_COUNTER  0x22
-#define REG_REQUEST  0x24  // Readings requested, uint16 LE, writable: chips held powered for this many readings
-#define REG_CONFIG   0x26
-#define REG_REPORT   0x27
-#define REG_RANGE    0x28
-#define REG_SIGNAL   0x2A
-#define REG_ACCEL    0x30
-#define REG_ACCEL_TEMP 0x36
-#define REG_OFFSET   0x40
-#define REG_OFFSET_TEMP 0x46
+//   0x48–0x49   Range [cm], little-endian int16
+//   0x4A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
+//   0x50–0x55   Accelerometer X, Y, Z raw, little-endian int16 each
+//   0x56–0x57   Accelerometer temperature, the LIS3DH OUT_ADC3 word as read (L, H), relative, 1 digit/°C in the high byte
+#define REG_OFFSET   0x20
+#define REG_OFFSET_TEMP 0x26
+#define REG_STATUS   0x40
+#define REG_CTRL     0x41
+#define REG_COUNTER  0x42
+#define REG_REQUEST  0x44  // Readings requested, uint16 LE, writable: chips held powered for this many readings
+#define REG_CONFIG   0x46
+#define REG_REPORT   0x47
+#define REG_RANGE    0x48
+#define REG_SIGNAL   0x4A
+#define REG_ACCEL    0x50
+#define REG_ACCEL_TEMP 0x56
 #define BIT_READY    0x01
 #define BIT_PANFAULT 0x80
 #define BIT_TRIGGER  0x01
@@ -135,17 +137,15 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 #define FAULT_ACCEL_NOACK   0x21   // chip 1, kind 1
 #define NOTICE_UNIT_RESET   0xE6   // unit (7), kind 6: reset since the controller last wrote Control (a notice: no status bit)
 #define NOTICE_UNIT_PAGE0   0xE3   // unit (7), kind 3: Page 0 CRC did not match (unprovisioned or corrupt)
-#define NOTICE_ACCEL_CALIBRATED 0x29 // chip 1, kind 9: a zero was stored (Page 2 holds it)
+#define NOTICE_ACCEL_CALIBRATED 0x29 // chip 1, kind 9: a zero was stored (Page 1 holds it)
 #define NOTICE_BATCH_ABANDONED  0x0A // chip 0, kind 10: the controller stopped triggering and the LiDAR was powered down
 
 // Register array: three 32-byte pages (NW-Device-Specification). Page 0
-// (0x00–0x1F) identity, Page 1 (0x20–0x3F) status and sensor data, Page 2
-// (0x40–0x5F) calibration. A controller writes a start address, then reads
-// up to 32 bytes with auto-increment (see requestEvent). The contents below
-// are still the pre-Schema-1 map; they move to the Schema 1 layout in the
-// following commits.
+// (0x00–0x1F) identity, Page 1 (0x20–0x3F) calibration, Page 2 (0x40–0x5F)
+// status and sensor data. A controller writes a start address, then reads
+// up to 32 bytes with auto-increment (see requestEvent).
 #define REG_SIZE 96
-uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Pages 1-2 at runtime
+uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Page 1 from the EEPROM offsets at each reading; Page 2 at runtime
 bool page0Valid = false;      // Page 0 CRC matched what NW-Provision wrote
 
 // CRC-8/SMBUS (poly 0x07, init 0x00), the NW-Device-Specification reference.
@@ -169,7 +169,7 @@ void loadPage0() {
 }
 
 // Registers a controller may write. Everything else is read-only and writes
-// to it are ignored (NW-Device-Specification, Page 1 rules).
+// to it are ignored (NW-Device-Specification, Page 2 rules).
 bool isWritable(uint8_t pos) {
   return pos == REG_CTRL || pos == REG_CONFIG || pos == REG_I2C_ADDR
       || pos == REG_REQUEST || pos == REG_REQUEST + 1;
@@ -183,7 +183,7 @@ volatile bool stopFlag = false; //Used to indicate a stop condition
 volatile uint8_t regID = 0; //Used to denote which register will be read from
 
 int16_t offsets[3] = {0};  //X,Y,Z acceleration offsets to zero the angle of the device 
-int16_t offsetTemp = 0; //Accelerometer temperature word when the offsets were taken (Page 2, 0x46); the reference for a drift correction
+int16_t offsetTemp = 0; //Accelerometer temperature word when the offsets were taken (Page 1, 0x26); the reference for a drift correction
 int16_t accelTemp = 0; //Accelerometer temperature word of the last reading (OUT_ADC3, relative)
 //The zero: samples at the 10 Hz output rate until the standard error of every
 //axis mean is below ZERO_SE_MAX counts, after at least ZERO_MIN_SAMPLES and at
@@ -308,7 +308,7 @@ void loop() {
     }
   }
   sleep_disable();
-  lidarConfig = reg[REG_CONFIG] & 0x03; //Pull low two bits from Config (0x26) to get Lidar configuration state
+  lidarConfig = reg[REG_CONFIG] & 0x03; //Pull low two bits from Config (0x46) to get Lidar configuration state
   // A reading begins: clear ready, take the chip selection, consume the trigger.
   reg[REG_STATUS] &= ~BIT_READY;
   bool doLidar = reg[REG_CTRL] & CHIP_LIDAR;
@@ -470,7 +470,7 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
       splitAndLoad(REG_ACCEL + 4, Axis[2]);
       splitAndLoad(REG_ACCEL_TEMP, accelTemp);
 
-      splitAndLoad(REG_OFFSET, offsets[0]);  //Load offsets (Page 2)
+      splitAndLoad(REG_OFFSET, offsets[0]);  //Load offsets (Page 1)
       splitAndLoad(REG_OFFSET + 2, offsets[1]);
       splitAndLoad(REG_OFFSET + 4, offsets[2]);
       splitAndLoad(REG_OFFSET_TEMP, offsetTemp);
@@ -838,11 +838,11 @@ void updateOffset(int16_t *AxisData, int16_t Temp)  //Pass in array of X,Y,Z off
   // }
   for(int i = 0; i < 3; i++) {
     // ((EEPROM.read(p + i) << 8) | EEPROM.read(2*i + 1)); //Read from desired entry in EEPROM and concatonate
-    EEPROM.update(PAGE2_BASE + 2*i, AxisData[i] >> 8);  //Write MSB
-    EEPROM.update(PAGE2_BASE + 2*i + 1, AxisData[i] & 0xFF);  //Write LSB
+    EEPROM.update(PAGE1_BASE + 2*i, AxisData[i] >> 8);  //Write MSB
+    EEPROM.update(PAGE1_BASE + 2*i + 1, AxisData[i] & 0xFF);  //Write LSB
   }
-  EEPROM.update(PAGE2_BASE + 6, Temp >> 8); //The temperature the zero was taken at, beside it
-  EEPROM.update(PAGE2_BASE + 7, Temp & 0xFF);
+  EEPROM.update(PAGE1_BASE + 6, Temp >> 8); //The temperature the zero was taken at, beside it
+  EEPROM.update(PAGE1_BASE + 7, Temp & 0xFF);
 }
 
 void getOffsets()
@@ -858,11 +858,11 @@ void getOffsets()
 
   // uint8_t Val[4] = {0}; //Blank array to read bytes into which can be converted to single float
   for(int i = 0; i < 3; i++) {
-      offsets[i] = (int)((EEPROM.read(PAGE2_BASE + 2*i) << 8) | EEPROM.read(PAGE2_BASE + 2*i + 1)); //Read from desired entry in EEPROM and concatonate
-      if (offsets[i] == -1) offsets[i] = 0; //0xFFFF = never written (fresh Page 2): no offset
+      offsets[i] = (int)((EEPROM.read(PAGE1_BASE + 2*i) << 8) | EEPROM.read(PAGE1_BASE + 2*i + 1)); //Read from desired entry in EEPROM and concatonate
+      if (offsets[i] == -1) offsets[i] = 0; //0xFFFF = never written (fresh Page 1): no offset
     // memcpy(&offsets[i], &Val, sizeof(float)); //Load the 4 discrete bytes back into the ith offset float
   }
-  offsetTemp = (int16_t)((EEPROM.read(PAGE2_BASE + 6) << 8) | EEPROM.read(PAGE2_BASE + 7));
+  offsetTemp = (int16_t)((EEPROM.read(PAGE1_BASE + 6) << 8) | EEPROM.read(PAGE1_BASE + 7));
   if(offsetTemp == -1) offsetTemp = 0; //never written
 }
 
