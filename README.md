@@ -303,7 +303,7 @@ The Apis firmware runs on an ATTiny1634 and exposes an I2C register map to the h
 
 The device exposes a flat, byte-addressable virtual address space. The controller writes a 1-byte starting address, then reads up to 32 bytes in one transaction; the firmware auto-increments. Pages are 32-byte aligned.
 
-The map below is what the firmware on `master` implements (firmware patch 2, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
+The map below is what the firmware on `master` implements (firmware patch 4, unreleased). Boards carrying the previous firmware (v0.1.x, the deployed 2019-era map) are described at the end of this section; a Schema 1 library will refuse them until they are reflashed and provisioned.
 
 ### Measurement loop
 
@@ -353,11 +353,11 @@ Block 3 (0x18–0x1F)   Integrity + administration
   0x1F        0x41              I2C address (writable; 0xFF = use default 0x41)
 ```
 
-If the CRC in EEPROM does not match, or the schema byte is not 0x01, the firmware still runs but sets the fault byte to "unit: Page 0 checksum" (`0xE3`); the board needs provisioning.
+If the CRC in EEPROM does not match, or the schema byte is not 0x01, the firmware still runs but sets the Report register to "unit: Page 0 checksum" (`0xE3`); the board needs provisioning.
 
 **Page 2 (0x40–0x5F) – Status and sensor data (SRAM)**
 
-Chip table (index for status fault bits, control chip-select bits, and the fault byte):
+Chip table (index for status fault bits, control chip-select bits, and the Report register):
 
 | Index | Chip | Measurements |
 |-------|------|--------------|
@@ -372,13 +372,13 @@ Block 0 (0x40–0x47)   Universal block (NW-Device-Specification)
                                 when the reading starts); bit 1 measure LiDAR; bit 2 measure
                                 accelerometer (power-up: both set); bit 7 sleep – defined by
                                 the spec, not yet implemented here (cleared by the firmware).
-                                Any write to Control clears the fault byte.
+                                Any write to Control clears the Report register.
   0x42–0x43   Reading counter   uint16, little-endian, +1 each time ready is set; 0 at boot
   0x44–0x45   Readings          writable, uint16 little-endian: how many readings the controller will
               requested         trigger with the LiDAR held powered; 0 (boot value) = one per trigger,
                                 powered down after each. A new write replaces the remainder.
   0x46        Config            writable. bits 1:0 LiDAR sensitivity mode (see below)
-  0x47        Fault             latched until the controller writes Control.
+  0x47        Report            latched until the controller writes Control: the most recent report, a fault (its chip's status bit is set too) or a notice (no status bit): bits 7-5 chip (7 = the unit), bits 4-0 kind (1 no acknowledge, 2 timeout, 5 not initialised, 6 reset, 9 calibration stored, 10 batch abandoned).
                                 bits 7–5 chip (0 LiDAR, 1 accelerometer, 7 unit);
                                 bits 4–0 kind (1 no-acknowledge, 2 timeout, 3 Page 0 checksum,
                                 5 not initialised, 6 reset since the controller last wrote Control)
@@ -392,14 +392,14 @@ Block 2 (0x50–0x57)   Accelerometer
   0x50–0x51   Accel X           little-endian int16 (raw counts, >> 4)
   0x52–0x53   Accel Y           little-endian int16
   0x54–0x55   Accel Z           little-endian int16
-  0x56–0x57   Reserved
+  0x56–0x57   Accel temperature, the LIS3DH OUT_ADC3 word as read (low byte first): relative, 1 digit per °C in the high byte (patch 3)
 
 Block 3 (0x58–0x5F)   Reserved
 ```
 
 Check bit 0 of 0x40 before using any measurement; if clear, the data registers are stale. Compare the reading counter with the last value read to know whether a new reading has happened since.
 
-At boot the fault byte reads `0xE6`, "unit: reset since the controller last wrote Control", so a controller can tell that the device restarted (and lost its volatile configuration) since it last configured it. The first write to Control clears it.
+At boot the Report register reads `0xE6`, "unit: reset since the controller last wrote Control", so a controller can tell that the device restarted (and lost its volatile configuration) since it last configured it. The first write to Control clears it.
 
 **Page 1 (0x20–0x3F) – Calibration (EEPROM 0xE0–0xFF)**
 
@@ -408,7 +408,7 @@ Block 0 (0x20–0x27)   Accelerometer offsets
   0x20–0x21   Offset X          little-endian int16
   0x22–0x23   Offset Y          little-endian int16
   0x24–0x25   Offset Z          little-endian int16
-  0x26–0x27   Reserved
+  0x26–0x27   Accel temperature word when the offsets were taken (patch 3)
 
 Block 1–3 (0x28–0x3F)   Reserved
 ```
