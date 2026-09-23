@@ -45,7 +45,7 @@ const int ACCEL_ADR = 0x18; //DEBUG!
 // library. The hardware version lives in Page 0 (EEPROM), written at
 // provisioning; the firmware writes this constant into the served copy of
 // Page 0 at 0x0A and recomputes the CRC there (NW-Device-Specification).
-#define FW_FW_PATCH 3
+#define FW_FW_PATCH 4
 
 // Page 0 (identity, 32 bytes) is the top of EEPROM: 0xE0-0xFF on the
 // ATtiny1634's 256-byte EEPROM. Written once by NW-Provision; read at boot.
@@ -99,9 +99,12 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 //   0x22–0x23   Reading counter, uint16 little-endian, +1 when ready is set
 //   0x24–0x25   Reserved for counter extension
 //   0x26        Config (writable): sensitivity mode bits [1:0]
-//   0x27        Fault, latched until the controller writes Control:
-//               bits 7–5 chip (0 LiDAR, 1 accelerometer), bits 4–0 kind
-//               (1 no-acknowledge, 2 timeout)
+//   0x27        Report, latched until the controller writes Control: the
+//               device's most recent report, a fault (its chip's status bit
+//               is set too) or a notice (no status bit):
+//               bits 7–5 chip (0 LiDAR, 1 accelerometer, 7 the unit), bits 4–0 kind
+//               (1 no-acknowledge, 2 timeout, 5 not initialised, 6 reset,
+//               9 calibration stored, 10 batch abandoned)
 //   0x28–0x29   Range [cm], little-endian int16
 //   0x2A        LiDAR Lite signal strength (uint8_t, from LiDAR Lite reg 0x0E)
 //   0x30–0x35   Accelerometer X, Y, Z raw, little-endian int16 each
@@ -113,7 +116,7 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 #define REG_COUNTER  0x22
 #define REG_REQUEST  0x24  // Readings requested, uint16 LE, writable: chips held powered for this many readings
 #define REG_CONFIG   0x26
-#define REG_FAULT    0x27
+#define REG_REPORT   0x27
 #define REG_RANGE    0x28
 #define REG_SIGNAL   0x2A
 #define REG_ACCEL    0x30
@@ -130,8 +133,10 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 #define FAULT_LIDAR_NOACK   0x01   // chip 0, kind 1: never acknowledged after power-up
 #define FAULT_LIDAR_NOTINIT 0x05   // chip 0, kind 5: acknowledged but never reported healthy
 #define FAULT_ACCEL_NOACK   0x21   // chip 1, kind 1
-#define FAULT_UNIT_RESET    0xE6   // unit (7), kind 6: reset since the controller last wrote Control
-#define FAULT_UNIT_PAGE0    0xE3   // unit (7), kind 3: Page 0 CRC did not match (unprovisioned or corrupt)
+#define NOTICE_UNIT_RESET   0xE6   // unit (7), kind 6: reset since the controller last wrote Control (a notice: no status bit)
+#define NOTICE_UNIT_PAGE0   0xE3   // unit (7), kind 3: Page 0 CRC did not match (unprovisioned or corrupt)
+#define NOTICE_ACCEL_CALIBRATED 0x29 // chip 1, kind 9: a zero was stored (Page 2 holds it)
+#define NOTICE_BATCH_ABANDONED  0x0A // chip 0, kind 10: the controller stopped triggering and the LiDAR was powered down
 
 // Register array: three 32-byte pages (NW-Device-Specification). Page 0
 // (0x00–0x1F) identity, Page 1 (0x20–0x3F) status and sensor data, Page 2
@@ -230,7 +235,7 @@ void setup() {
 
   reg[REG_STATUS] = 0; // Not ready: no reading yet
   reg[REG_CTRL] = CHIP_LIDAR | CHIP_ACCEL; // Power-up: every chip selected
-  reg[REG_FAULT] = page0Valid ? FAULT_UNIT_RESET : FAULT_UNIT_PAGE0; // Latched until the controller writes Control
+  reg[REG_REPORT] = page0Valid ? NOTICE_UNIT_RESET : NOTICE_UNIT_PAGE0; // Latched until the controller writes Control
   delay(10);
   si.i2c_init(); //Begin I2C master
   initAccel();
@@ -286,7 +291,7 @@ void loop() {
       zeroRequested = false;
       if(!digitalRead(HALL_SWITCH)) switchLatch = true; //latch switch until toggle of state
       digitalWrite(STAT_LED, HIGH); //Turn on status LED while the zero is being taken; off once it is stored. The magnet may leave at once
-      if(zeroAccel()) updateOffset(accelVals, accelTemp); //As many samples as the zero needs; nothing stored if the accelerometer failed
+      if(zeroAccel()) { updateOffset(accelVals, accelTemp); latchNotice(NOTICE_ACCEL_CALIBRATED); } //As many samples as the zero needs; nothing stored if the accelerometer failed
       digitalWrite(STAT_LED, LOW);
     }
     if(digitalRead(HALL_SWITCH)) {
@@ -299,7 +304,7 @@ void loop() {
     // }
     if(lidarOn && (millis() - lidarLastReading) > lidarBatchTimeout) {
       lidarPowerDown(); // batch abandoned: the controller stopped triggering
-      reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT;
+      latchNotice(NOTICE_BATCH_ABANDONED);
     }
   }
   sleep_disable();
@@ -360,9 +365,9 @@ void loop() {
   // Reading complete: load status and fault, bump the counter, set ready.
   // Atomic so a controller's page read never straddles the update.
   uint8_t status = BIT_READY;
-  if(doLidar && lidarInitFail) { status |= 0x02; reg[REG_FAULT] = lidarInitFail; }
-  else if(doLidar && lidarFail) { status |= 0x02; reg[REG_FAULT] = FAULT_LIDAR_TIMEOUT; }
-  if (doAccel && accelFail) { status |= 0x04; reg[REG_FAULT] = FAULT_ACCEL_NOACK; }
+  if(doLidar && lidarInitFail) { status |= 0x02; reg[REG_REPORT] = lidarInitFail; }
+  else if(doLidar && lidarFail) { status |= 0x02; reg[REG_REPORT] = FAULT_LIDAR_TIMEOUT; }
+  if (doAccel && accelFail) { status |= 0x04; reg[REG_REPORT] = FAULT_ACCEL_NOACK; }
   if (status & 0x7E) status |= BIT_PANFAULT;
   uint16_t count = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
   count++;
@@ -757,7 +762,7 @@ void receiveEvent(int DataLen)
       uint8_t Val = Wire.read();
       if (!isWritable(Pos)) return; //Read-only register: ignore the write
       reg[Pos] = Val; //Set register value
-      if (Pos == REG_CTRL) reg[REG_FAULT] = 0; //A control write acknowledges the latched fault
+      if (Pos == REG_CTRL) reg[REG_REPORT] = 0; //A control write acknowledges the report
       if(Pos == REG_REQUEST || Pos == REG_REQUEST + 1) requestWritten = true; //Latched at the next trigger
       if (Pos == REG_I2C_ADDR) EEPROM.update(PAGE0_BASE + REG_I2C_ADDR, Val); //Persist I2C address (compare-before-write); takes effect on next boot
   }
@@ -809,6 +814,17 @@ bool zeroAccel() //Average fresh samples into accelVals until the mean of every 
   }
   for(int i = 0; i < 3; i++) accelVals[i] = (int16_t)((Sum[i] + (Sum[i] >= 0 ? (int32_t)n/2 : -(int32_t)n/2))/(int32_t)n); //Rounded mean
   return true;
+}
+
+bool isFaultCode(uint8_t code) //A report code whose kind is a fault (1-5, 7, 8), as opposed to a notice (6, 9, 10)
+{
+  uint8_t kind = code & 0x1F;
+  return kind >= 1 && kind <= 8 && kind != 6;
+}
+
+void latchNotice(uint8_t code) //A notice never overwrites a fault the controller has not yet acknowledged
+{
+  if(!isFaultCode(reg[REG_REPORT])) reg[REG_REPORT] = code;
 }
 
 void updateOffset(int16_t *AxisData, int16_t Temp)  //Pass in array of X,Y,Z offset values and the temperature word they were taken at
