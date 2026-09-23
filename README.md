@@ -310,7 +310,7 @@ The map below is what the firmware on `master` implements (firmware patch 2, unr
 The firmware is on-demand: it idles (core in idle sleep, woken by an I2C address match or the Hall switch) until the controller writes the trigger bit, then
 
 1. Clears the ready bit, reads the chip-select bits from the control register, and consumes the trigger
-2. If the controller has written the readings-requested word (0x24–0x25) since the last trigger, latches it and notes the reading counter
+2. If the controller has written the readings-requested word (0x44–0x45) since the last trigger, latches it and notes the reading counter
 3. If the LiDAR chip is selected and the LiDAR is off: closes the 5 V switch, waits ~20 ms for the rail (680 µF through the MIC2544 at its ~227 mA limit), raises enable, and polls the LiDAR for an I2C acknowledge and the health flag in its STATUS register (bit 5) for up to 100 ms; on timeout toggles enable once more; a second failure powers the LiDAR down and latches fault chip 0 kind 1 (no acknowledge) or 5 (not initialised). On success it writes the configured sensitivity
 4. If the LiDAR chip is selected and powered: writes ACQ_COMMAND (any non-zero value starts a measurement on the v3HP), polls STATUS bit 0 (busy) until clear, and reads the 16-bit range and the signal strength. The LiDAR's mode pin is not used (see issue #24)
 5. If the accelerometer chip is selected: reads the 3-axis accelerometer (LIS3DH) and the stored offsets
@@ -321,9 +321,9 @@ Serial output (range and axes per reading) exists only when the sketch is compil
 
 ### Register map (firmware on `master` – Schema 1)
 
-Three 32-byte pages. Page 0 (identity) is copied from EEPROM at boot; Page 1 (status and sensor data) lives in SRAM; Page 2 (calibration) is served from the offsets held in EEPROM.
+Three 32-byte pages. Page 0 (identity) is copied from EEPROM at boot; Page 1 (calibration) is served from the offsets held in EEPROM; Page 2 (status and sensor data) lives in SRAM. Pages renumbered 2026-09-23 (spec 4c3b18d): calibration is Page 1 at 0x20, data Page 2 at 0x40.
 
-**Page 0 (0x00–0x1F) – Identity (EEPROM 0xE0–0xFF, written by [NW-Provision](https://github.com/NorthernWidget/NW-Provision))**
+**Page 0 (0x00–0x1F) – Identity (EEPROM 0xC0–0xDF, written by [NW-Provision](https://github.com/NorthernWidget/NW-Provision))**
 
 ```
 Block 0 (0x00–0x07)   Core identity
@@ -355,7 +355,7 @@ Block 3 (0x18–0x1F)   Integrity + administration
 
 If the CRC in EEPROM does not match, or the schema byte is not 0x01, the firmware still runs but sets the fault byte to "unit: Page 0 checksum" (`0xE3`); the board needs provisioning.
 
-**Page 1 (0x20–0x3F) – Status and sensor data (SRAM)**
+**Page 2 (0x40–0x5F) – Status and sensor data (SRAM)**
 
 Chip table (index for status fault bits, control chip-select bits, and the fault byte):
 
@@ -365,59 +365,59 @@ Chip table (index for status fault bits, control chip-select bits, and the fault
 | 1 | LIS3DH accelerometer | X, Y, Z |
 
 ```
-Block 0 (0x20–0x27)   Universal block (NW-Device-Specification)
-  0x20        Status            bit 0 ready; bit 1 LiDAR fault; bit 2 accelerometer fault;
+Block 0 (0x40–0x47)   Universal block (NW-Device-Specification)
+  0x40        Status            bit 0 ready; bit 1 LiDAR fault; bit 2 accelerometer fault;
                                 bit 7 pan-fault. Read-only, live.
-  0x21        Control           writable. bit 0 trigger a reading now (the firmware clears it
+  0x41        Control           writable. bit 0 trigger a reading now (the firmware clears it
                                 when the reading starts); bit 1 measure LiDAR; bit 2 measure
                                 accelerometer (power-up: both set); bit 7 sleep – defined by
                                 the spec, not yet implemented here (cleared by the firmware).
                                 Any write to Control clears the fault byte.
-  0x22–0x23   Reading counter   uint16, little-endian, +1 each time ready is set; 0 at boot
-  0x24–0x25   Readings          writable, uint16 little-endian: how many readings the controller will
+  0x42–0x43   Reading counter   uint16, little-endian, +1 each time ready is set; 0 at boot
+  0x44–0x45   Readings          writable, uint16 little-endian: how many readings the controller will
               requested         trigger with the LiDAR held powered; 0 (boot value) = one per trigger,
                                 powered down after each. A new write replaces the remainder.
-  0x26        Config            writable. bits 1:0 LiDAR sensitivity mode (see below)
-  0x27        Fault             latched until the controller writes Control.
+  0x46        Config            writable. bits 1:0 LiDAR sensitivity mode (see below)
+  0x47        Fault             latched until the controller writes Control.
                                 bits 7–5 chip (0 LiDAR, 1 accelerometer, 7 unit);
                                 bits 4–0 kind (1 no-acknowledge, 2 timeout, 3 Page 0 checksum,
                                 5 not initialised, 6 reset since the controller last wrote Control)
 
-Block 1 (0x28–0x2F)   LiDAR Lite
-  0x28–0x29   Range [cm]        little-endian int16; -9999 on timeout
-  0x2A        Signal strength   uint8
-  0x2B–0x2F   Reserved
+Block 1 (0x48–0x4F)   LiDAR Lite
+  0x48–0x49   Range [cm]        little-endian int16; -9999 on timeout
+  0x4A        Signal strength   uint8
+  0x4B–0x4F   Reserved
 
-Block 2 (0x30–0x37)   Accelerometer
-  0x30–0x31   Accel X           little-endian int16 (raw counts, >> 4)
-  0x32–0x33   Accel Y           little-endian int16
-  0x34–0x35   Accel Z           little-endian int16
-  0x36–0x37   Reserved
+Block 2 (0x50–0x57)   Accelerometer
+  0x50–0x51   Accel X           little-endian int16 (raw counts, >> 4)
+  0x52–0x53   Accel Y           little-endian int16
+  0x54–0x55   Accel Z           little-endian int16
+  0x56–0x57   Reserved
 
-Block 3 (0x38–0x3F)   Reserved
+Block 3 (0x58–0x5F)   Reserved
 ```
 
-Check bit 0 of 0x20 before using any measurement; if clear, the data registers are stale. Compare the reading counter with the last value read to know whether a new reading has happened since.
+Check bit 0 of 0x40 before using any measurement; if clear, the data registers are stale. Compare the reading counter with the last value read to know whether a new reading has happened since.
 
 At boot the fault byte reads `0xE6`, "unit: reset since the controller last wrote Control", so a controller can tell that the device restarted (and lost its volatile configuration) since it last configured it. The first write to Control clears it.
 
-**Page 2 (0x40–0x5F) – Calibration (EEPROM 0xC0–0xDF)**
+**Page 1 (0x20–0x3F) – Calibration (EEPROM 0xE0–0xFF)**
 
 ```
-Block 0 (0x40–0x47)   Accelerometer offsets
-  0x40–0x41   Offset X          little-endian int16
-  0x42–0x43   Offset Y          little-endian int16
-  0x44–0x45   Offset Z          little-endian int16
-  0x46–0x47   Reserved
+Block 0 (0x20–0x27)   Accelerometer offsets
+  0x20–0x21   Offset X          little-endian int16
+  0x22–0x23   Offset Y          little-endian int16
+  0x24–0x25   Offset Z          little-endian int16
+  0x26–0x27   Reserved
 
-Block 1–3 (0x48–0x5F)   Reserved
+Block 1–3 (0x28–0x3F)   Reserved
 ```
 
 Offsets are written when the Hall-effect switch is triggered with the magnet (the board's "set level" action). A never-written offset (0xFFFF) reads as zero.
 
 ### Sensitivity modes
 
-Write one of the following values to the config register (`0x26`, bits 1:0) to set the LiDAR Lite measurement sensitivity:
+Write one of the following values to the config register (`0x46`, bits 1:0) to set the LiDAR Lite measurement sensitivity:
 
 | Value | Description |
 |-------|-------------|
