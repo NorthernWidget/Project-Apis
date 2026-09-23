@@ -119,22 +119,22 @@ We recommend having circuit boards produced by a reputable manufacturer. Many ar
 
 Before placing components, you will need solder paste and a stencil. A stencil allows you to apply a controlled, even amount of paste to all pads at once. If you have access to a laser cutter, you can [create your own stencil](https://learn.adafruit.com/smt-manufacturing/laser-cut-stencils); otherwise, most PCB manufacturers offer stencil production as an add-on service. In a pinch, a solder-paste syringe works but increases the risk of bridged connections. Additional guidance on stenciling is available [here](https://www.sparkfun.com/tutorials/58).
 
-Once paste is applied, use tweezers — or a pick-and-place machine if available — to place each component onto its pads in the correct orientation. Slight misalignment is acceptable; surface tension from the molten solder will help pull components into place during reflow.
+Once paste is applied, use tweezers – or a pick-and-place machine if available – to place each component onto its pads in the correct orientation. Slight misalignment is acceptable; surface tension from the molten solder will help pull components into place during reflow.
 
 ### Reflowing circuit boards
 
 Reflowing heats the solder paste until it flows and bonds components to the board. A basic introduction is available [here](https://learn.sparkfun.com/tutorials/electronics-assembly/reflow). Common methods include:
 
-1. **Professional reflow oven** — the most consistent method
-2. **Converted toaster oven** — affordable and effective; see [SparkFun's guide](https://www.sparkfun.com/tutorials/60) and many other online references
-3. **Electric skillet** — surprisingly effective for simple boards; [guide here](https://www.sparkfun.com/tutorials/59)
-4. **Hot-air rework station** — more labor-intensive but gives fine control; suitable for single boards or small runs; [guide here](https://learn.sparkfun.com/tutorials/how-to-use-a-hot-air-rework-station/all)
+1. **Professional reflow oven** – the most consistent method
+2. **Converted toaster oven** – affordable and effective; see [SparkFun's guide](https://www.sparkfun.com/tutorials/60) and many other online references
+3. **Electric skillet** – surprisingly effective for simple boards; [guide here](https://www.sparkfun.com/tutorials/59)
+4. **Hot-air rework station** – more labor-intensive but gives fine control; suitable for single boards or small runs; [guide here](https://learn.sparkfun.com/tutorials/how-to-use-a-hot-air-rework-station/all)
 
 After reflow, clean up any bridged connections with **solder wick**.
 
 ### Debugging circuit boards
 
-Inspect the board carefully after reflow. Look for bridged connections, cold joints, or components that shifted out of alignment. A multimeter is essential for checking continuity and identifying shorts. An oscilloscope or logic analyzer can help verify that the microcontroller, accelerometer, and I2C bus are functioning correctly. If you are new to debugging circuit boards, working with an electrical engineering student or professional — even for a single session — can save significant time.
+Inspect the board carefully after reflow. Look for bridged connections, cold joints, or components that shifted out of alignment. A multimeter is essential for checking continuity and identifying shorts. An oscilloscope or logic analyzer can help verify that the microcontroller, accelerometer, and I2C bus are functioning correctly. If you are new to debugging circuit boards, working with an electrical engineering student or professional – even for a single session – can save significant time.
 
 ## Firmware
 
@@ -255,7 +255,7 @@ void initialize(){
 
 ### Northern Widget Resnik code
 
->> The Resnik/Okapi system uses a Particle Boron for cellular telemetry — the defining capability that distinguishes it from the Margay. That telemetry component is not yet shown here; the code below is currently identical to the Margay example. See [issue #21](https://github.com/NorthernWidget/Project-Apis/issues/21).
+>> The Resnik/Okapi system uses a Particle Boron for cellular telemetry – the defining capability that distinguishes it from the Margay. That telemetry component is not yet shown here; the code below is currently identical to the Margay example. See [issue #21](https://github.com/NorthernWidget/Project-Apis/issues/21).
 
 ```c++
 #include "Resnik.h"
@@ -319,11 +319,11 @@ The firmware is on-demand: it idles (core in idle sleep, woken by an I2C address
 
 Serial output (range and axes per reading) exists only when the sketch is compiled with `APIS_DEBUG` defined.
 
-### Register map (firmware on `master` — Schema 1)
+### Register map (firmware on `master` – Schema 1)
 
 Three 32-byte pages. Page 0 (identity) is copied from EEPROM at boot; Page 1 (status and sensor data) lives in SRAM; Page 2 (calibration) is served from the offsets held in EEPROM.
 
-**Page 0 (0x00–0x1F) — Identity (EEPROM 0xE0–0xFF, written by [NW-Provision](https://github.com/NorthernWidget/NW-Provision))**
+**Page 0 (0x00–0x1F) – Identity (EEPROM 0xE0–0xFF, written by [NW-Provision](https://github.com/NorthernWidget/NW-Provision))**
 
 ```
 Block 0 (0x00–0x07)   Core identity
@@ -355,7 +355,7 @@ Block 3 (0x18–0x1F)   Integrity + administration
 
 If the CRC in EEPROM does not match, or the schema byte is not 0x01, the firmware still runs but sets the fault byte to "unit: Page 0 checksum" (`0xE3`); the board needs provisioning.
 
-**Page 1 (0x20–0x3F) — Status and sensor data (SRAM)**
+**Page 1 (0x20–0x3F) – Status and sensor data (SRAM)**
 
 Chip table (index for status fault bits, control chip-select bits, and the fault byte):
 
@@ -370,7 +370,7 @@ Block 0 (0x20–0x27)   Universal block (NW-Device-Specification)
                                 bit 7 pan-fault. Read-only, live.
   0x21        Control           writable. bit 0 trigger a reading now (the firmware clears it
                                 when the reading starts); bit 1 measure LiDAR; bit 2 measure
-                                accelerometer (power-up: both set); bit 7 sleep — defined by
+                                accelerometer (power-up: both set); bit 7 sleep – defined by
                                 the spec, not yet implemented here (cleared by the firmware).
                                 Any write to Control clears the fault byte.
   0x22–0x23   Reading counter   uint16, little-endian, +1 each time ready is set; 0 at boot
@@ -401,7 +401,7 @@ Check bit 0 of 0x20 before using any measurement; if clear, the data registers a
 
 At boot the fault byte reads `0xE6`, "unit: reset since the controller last wrote Control", so a controller can tell that the device restarted (and lost its volatile configuration) since it last configured it. The first write to Control clears it.
 
-**Page 2 (0x40–0x5F) — Calibration (EEPROM 0xC0–0xDF)**
+**Page 2 (0x40–0x5F) – Calibration (EEPROM 0xC0–0xDF)**
 
 ```
 Block 0 (0x40–0x47)   Accelerometer offsets
