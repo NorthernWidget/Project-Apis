@@ -162,7 +162,7 @@ uint8_t crc8(const uint8_t* data, uint8_t len) {
 // then substitute this firmware's patch version at 0x0A and recompute the
 // CRC of the served copy (EEPROM is left as provisioned).
 void loadPage0() {
-  for (uint8_t i = 0; i < 32; i++) reg[i] = EEPROM.read(PAGE0_BASE + i);
+  for (uint8_t i = 0; i < 64; i++) reg[i] = EEPROM.read(PAGE0_BASE + i);   // the stored half, Page 0 and Page 1, byte for byte
   page0Valid = (crc8(reg, 0x1E) == reg[0x1E]) && reg[0x00] == 0x01;
   reg[0x0A] = FW_FW_PATCH;
   reg[0x1E] = crc8(reg, 0x1E);
@@ -746,9 +746,10 @@ void requestEvent()
   // Serve up to one full page from the requested register with auto-increment.
   // WireS clocks out only as many bytes as the controller asks for; the rest
   // of the buffer is discarded at the stop condition. Reads past the end of
-  // the array wrap, so a controller never receives bytes from outside it.
+  // the array return zeros, never a wrap onto Page 0.
   for(uint8_t i = 0; i < 32; i++) {
-    Wire.write(reg[(regID + i) % REG_SIZE]);
+    uint16_t k = (uint16_t)regID + i;
+    Wire.write(k < REG_SIZE ? reg[k] : 0x00);
   }
 }
 
