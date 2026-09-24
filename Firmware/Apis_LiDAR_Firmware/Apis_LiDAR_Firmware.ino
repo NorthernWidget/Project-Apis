@@ -490,7 +490,7 @@ float getG(bool Set)  //FIX! Add offset support //By default set/send data to re
   uint8_t Data[6] = {0}; //Init data
   si.i2c_start((ACCEL_ADR << 1) | READ);
   for(int i = 0; i < 6; i++) {
-    Data[i] = si.i2c_read(false);
+    Data[i] = si.i2c_read(i == 5); //NACK the last byte, as the bus expects
   }
   si.i2c_stop();
   for(int i = 0; i < 3; i++) {
@@ -640,7 +640,7 @@ int16_t getRange()  //FIX! add range constraint??
     sendCommand(LIDAR_ADR, 0x0E);
     si.i2c_stop();
     si.i2c_start((LIDAR_ADR << 1) | READ);
-    reg[REG_SIGNAL] = si.i2c_read(false);
+    reg[REG_SIGNAL] = si.i2c_read(true); //One byte, so it is the last: NACK
     si.i2c_stop();
     lidarFail = false;  //Clear failure flag
   }
@@ -710,7 +710,7 @@ int readByte(uint8_t Adr, uint8_t Command, uint8_t Pos) //Send command value, an
   bool Error = sendCommand(Adr, Command);
   si.i2c_rep_start((Adr << 1) | READ);
   uint8_t ValLow = si.i2c_read(false);
-  uint8_t ValHigh = si.i2c_read(false);
+  uint8_t ValHigh = si.i2c_read(true); //Last byte: NACK
   si.i2c_stop();
   Error = true; //DEBUG!
   if(Error == true) {
@@ -754,7 +754,7 @@ int16_t readWord(uint8_t Adr, uint8_t Command)  //Send command value, returns en
   si.i2c_start((Adr << 1) | READ);
 
   uint8_t ByteLow = si.i2c_read(false);  //Read in high and low bytes (big endian)
-  uint8_t ByteHigh = si.i2c_read(false);
+  uint8_t ByteHigh = si.i2c_read(true);  //Last byte: NACK
   si.i2c_stop();
   // if(Error == true) return ((ByteHigh << 8) | ByteLow); //If read succeeded, return concatonated value
   // else return -1; //Return error if read failed
@@ -767,7 +767,7 @@ int readWordLE(uint8_t Adr, uint8_t Command)  //Send command value, returns enti
   si.i2c_stop();
   si.i2c_start((Adr << 1) | READ);
   uint8_t ByteHigh = (int8_t) si.i2c_read(false);  //Read in high and low bytes (big endian)
-  uint8_t ByteLow = (int8_t) si.i2c_read(false);
+  uint8_t ByteLow = (int8_t) si.i2c_read(true);   //Last byte: NACK
   si.i2c_stop();
   // if(Error == true) return ((ByteHigh << 8) | ByteLow); //If read succeeded, return concatonated value
   // else return -1; //Return error if read failed
@@ -839,7 +839,7 @@ int16_t readAccelTemp() //The LIS3DH OUT_ADC3 word (L, H) as read: the temperatu
   si.i2c_stop();
   si.i2c_start((ACCEL_ADR << 1) | READ);
   uint8_t Low = si.i2c_read(false);
-  uint8_t High = si.i2c_read(false);
+  uint8_t High = si.i2c_read(true); //Last byte: NACK
   si.i2c_stop();
   return (int16_t)((High << 8) | Low);
 }
