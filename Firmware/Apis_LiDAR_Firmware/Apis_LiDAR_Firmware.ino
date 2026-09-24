@@ -723,11 +723,7 @@ int readByte(uint8_t Adr, uint8_t Command, uint8_t Pos) //Send command value, an
 
 int readByte(uint8_t Adr, uint8_t Command) //Send command value, and high/low byte to read, returns desired byte
 {
-  //Every caller of this reads ONE byte, so auto-increment is never needed here.
-  //Forcing it also broke the LiDAR: bit 7 is the LIS3DH's auto-increment flag
-  //(SUB(7)), and the v3HP has no such flag - it auto-increments within a block
-  //transfer regardless - so 0x01 became register 0x81. The multi-byte
-  //accelerometer reads set the bit at their own call sites.
+  Command |= 0x80; //turn on auto increment //FIX!!! Remove for other I2C transactions 
   bool Error = sendCommand(Adr, Command);
   si.i2c_stop(); //DEBUG!
   si.i2c_start((Adr << 1) | READ);
