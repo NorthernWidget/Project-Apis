@@ -674,10 +674,7 @@ uint8_t writeWord(uint8_t Adr, uint8_t Command, unsigned int Data)  //Writes val
 
 uint8_t writeByte(uint8_t Adr, uint8_t Command, uint8_t Data)  //Writes value to 16 bit register
 {
-  //Every caller writes ONE register, so auto-increment is never needed, and on
-  //the LiDAR bit 7 is not an auto-increment flag at all - it is part of the
-  //address. Forcing it sent 0x00 to 0x80, 0x02 to 0x82 and so on, so none of
-  //the configuration and none of the measurement commands reached the part.
+  Command |= 0x80; //turn on auto increment //FIX!!! Remove for other I2C transactions 
   si.i2c_start((Adr << 1) | WRITE);
   si.i2c_write(Command); //Write Command value
   uint8_t Error = si.i2c_write((Data) & 0xFF); //Write MSB
