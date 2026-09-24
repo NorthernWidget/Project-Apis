@@ -613,14 +613,16 @@ uint8_t initLiDAR()
 int16_t getRange()  //FIX! add range constraint??
 {
   int16_t Data = 0; //Used to store results
-  //ACQ_COMMAND. The manual describes this register as split: bits 7:1 "write
-  //any non-zero value to start a measurement", and bit 0 a hard reset that
-  //acts only once enabled through LEGACY_RESET_EN (0x06), which is never
-  //written here. Read strictly, 0x01 carries nothing in 7:1 - yet this is what
-  //the firmware has always sent, and units do measure. So the part triggers on
-  //any non-zero write and the manual's bit split is tighter than the silicon.
-  //The manual's own worked sequence uses 0x04; changing to it is a bench
-  //experiment, not a fix, and would want a before-and-after comparison.
+  //ACQ_COMMAND, and this is an OPEN QUESTION for the bench, not a settled line.
+  //The manual splits the register: bits 7:1 "write any non-zero value to start
+  //a measurement", bit 0 "performs a hard reset ... must be enabled by writing
+  //1 to bit 0 on register 0x06", which this firmware never writes. Read
+  //strictly, the 0x01 below carries nothing in 7:1 and should start nothing,
+  //and the manual's own worked sequence writes 0x04 instead.
+  //This value has been here since the first commit. Whether these units have
+  //ever returned a valid range is the thing to establish: if they have, the
+  //part is more permissive than its manual and this stays; if they have not,
+  //0x04 is the fix. One bench run comparing the two settles it.
   writeByte(LIDAR_ADR, 0x00, 0x01);
   // si.i2c_start((LIDAR_ADR << 1) | WRITE);
   // si.i2c_write(0x00); 
