@@ -613,12 +613,7 @@ uint8_t initLiDAR()
 int16_t getRange()  //FIX! add range constraint??
 {
   int16_t Data = 0; //Used to store results
-  //ACQ_COMMAND: the manual splits this register. Bits 7:1 are "write any
-  //non-zero value to start a measurement"; bit 0 is a hard reset that acts
-  //only once enabled by writing 1 to bit 0 of LEGACY_RESET_EN (0x06), which
-  //this firmware never does. 0x01 therefore carries nothing in 7:1 and asks
-  //for a reset that is disabled. 0x04 is what the manual's own sequence uses.
-  writeByte(LIDAR_ADR, 0x00, 0x04);
+  writeByte(LIDAR_ADR, 0x00, 0x01); // ACQ_COMMAND: any non-zero value starts a measurement (v3HP)
   // si.i2c_start((LIDAR_ADR << 1) | WRITE);
   // si.i2c_write(0x00); 
   // si.i2c_stop();
