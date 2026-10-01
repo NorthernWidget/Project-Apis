@@ -172,6 +172,21 @@ struct Chip {
 // up to 32 bytes with auto-increment (see requestEvent).
 #define REG_SIZE 96
 uint8_t reg[REG_SIZE] = {0};  // Page 0 filled by loadPage0(); Page 1 by loadPage1() at boot and after each zero; Page 2 at runtime
+
+// A reading is assembled here and copied into reg with the counter, so a page
+// read never sees half of one (the specification's atomic-rewrite rule). The
+// span is 0x48 to 0x57: every byte a reading writes, and no more. The zero
+// generation mirror at 0x58 is deliberately outside it, because a reading never
+// writes that - a stored zero does, already with interrupts disabled - and a
+// wider copy would overwrite it with stale buffer.
+//
+// splitAndLoad() indexes Staged[Pos - DATA_BASE] with no bound of its own, so a
+// DATA_LEN shorter than the writes reach corrupts whatever follows the buffer
+// and the registers never see the values at all. That is what happened on the
+// Walrus firmware with DATA_LEN 10 against writes reaching 24.
+#define DATA_BASE 0x48
+#define DATA_LEN  16
+uint8_t Staged[DATA_LEN] = {0};
 bool page0Valid = false;      // Page 0 CRC matched what NW-Provision wrote
 
 static uint8_t hexNibble(char c) {  // One hex digit to its value; 0 for anything else
@@ -339,7 +354,7 @@ Acquisition acquireLidarLiteV3HP() {
   if(lidarOn) Range = getRange();
   else {
     splitAndLoad(REG_RANGE, -9999);
-    reg[REG_SIGNAL] = 0;  // power-up failed
+    Staged[REG_SIGNAL - DATA_BASE] = 0;  // power-up failed
   }
 #ifdef APIS_DEBUG
   Serial.print('R'); //Preceed range value
@@ -460,6 +475,10 @@ void loop() {
   reg[REG_STATUS] &= ~BIT_READY;
   uint8_t selected = reg[REG_CTRL]; // Taken once: a controller write partway through must not change what this reading holds
   reg[REG_CTRL] &= ~(BIT_TRIGGER | BIT_SLEEP); // trigger consumed; sleep not implemented
+  // Seed the staged reading from what is already served, so a chip Control did
+  // not select keeps its last values instead of publishing zeros. Both Walrus
+  // chips write every reading and need no seed; an Apis selects its two apart.
+  memcpy(Staged, reg + DATA_BASE, DATA_LEN);
   if(requestWritten) { // a new readings-requested word: count from this reading
     requestWritten = false;
     requested = reg[REG_REQUEST] | (reg[REG_REQUEST + 1] << 8);
@@ -482,6 +501,7 @@ void loop() {
   uint16_t count = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
   count++;
   cli();
+  memcpy(reg + DATA_BASE, Staged, DATA_LEN); // The whole reading appears at once, with its counter
   reg[REG_COUNTER] = count & 0xFF; reg[REG_COUNTER + 1] = count >> 8;
   reg[REG_STATUS] = status;
   sei();
@@ -705,7 +725,7 @@ int16_t getRange()  //FIX! add range constraint??
     sendCommand(LIDAR_ADR, 0x0E);
     si.i2c_stop();
     si.i2c_start((LIDAR_ADR << 1) | READ);
-    reg[REG_SIGNAL] = si.i2c_read(true); //One byte, so it is the last: NACK
+    Staged[REG_SIGNAL - DATA_BASE] = si.i2c_read(true); //One byte, so it is the last: NACK
     si.i2c_stop();
     lidarFail = false;  //Clear failure flag
   }
@@ -713,7 +733,7 @@ int16_t getRange()  //FIX! add range constraint??
     lidarFail = true;
     Data = -9999;
     splitAndLoad(REG_RANGE, Data);
-    reg[REG_SIGNAL] = 0;
+    Staged[REG_SIGNAL - DATA_BASE] = 0;
   }
 
   return Data;
@@ -839,7 +859,7 @@ void splitAndLoad(uint8_t Pos, int16_t Val) //Write 16 bits
 {
   uint8_t Len = sizeof(Val);
   for(int i = Pos; i < Pos + Len; i++) {
-    reg[i] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
+    Staged[i - DATA_BASE] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
   }
 }
 
@@ -847,7 +867,7 @@ void splitAndLoad(uint8_t Pos, long Val)  //Write 32 bits
 {
   uint8_t Len = sizeof(Val);
   for(int i = Pos; i < Pos + Len; i++) {
-    reg[i] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
+    Staged[i - DATA_BASE] = (Val >> (i - Pos)*8) & 0xFF; //Pullout the next byte
   }
 }
 
