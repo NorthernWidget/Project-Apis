@@ -149,6 +149,23 @@ const unsigned long lidarBootTimeout = 100; // ms to wait for ACK + health after
 #define NOTICE_ACCEL_CALIBRATED 0x29 // chip 1, kind 9: a zero was stored (Page 1 holds it)
 #define NOTICE_BATCH_ABANDONED  0x0A // chip 0, kind 10: the controller stopped triggering and the LiDAR was powered down
 
+// What one acquisition has to say for itself. A fault means the chip's data are
+// not to be trusted, and the chip's Status bit is set; a notice reports
+// something the controller should know while the data still stand. Declared
+// here, ahead of every function, because the Arduino build writes its own
+// prototypes at the first function definition.
+struct Acquisition {
+  uint8_t Report;  // A Report code, or 0 when there is nothing to report
+  bool Fault;
+};
+
+// One chip on the board: the bit that selects it in Control and marks it in
+// Status, and the one function that reads it.
+struct Chip {
+  uint8_t Bit;
+  Acquisition (*Acquire)(void);
+};
+
 // Register array: three 32-byte pages (NW-Device-Specification). Page 0
 // (0x00–0x1F) identity, Page 1 (0x20–0x3F) calibration, Page 2 (0x40–0x5F)
 // status and sensor data. A controller writes a start address, then reads
@@ -299,6 +316,86 @@ void setup() {
 
 }
 
+// ACQUISITION
+// One chip, one acquisition, publishing every value that acquisition produced.
+// Nothing here touches Status, the reading counter or the Report register: the
+// loop owns those, so every chip is recorded the same way.
+
+Acquisition acquireLidarLiteV3HP() {
+  // The rangefinder is powered only while a batch runs. A power-up that failed
+  // earlier in this batch is not retried on every trigger: the remaining
+  // readings report the fault at once, which costs about 10 ms per reading
+  // instead of about 440 ms. A single reading retries.
+  if(!lidarOn && !lidarInitFail) lidarPowerUp();
+  if(lidarOn && lidarConfig != lidarConfigApplied) {
+    initLiDAR();
+    lidarConfigApplied = lidarConfig;  // Config changed mid-batch
+  }
+
+  // One acquisition, two quantities: getRange() publishes the range at
+  // REG_RANGE and the signal strength at REG_SIGNAL, which is what this chip
+  // yields and why the acquisition is named for the part and not for a range.
+  int16_t Range = -9999;
+  if(lidarOn) Range = getRange();
+  else {
+    splitAndLoad(REG_RANGE, -9999);
+    reg[REG_SIGNAL] = 0;  // power-up failed
+  }
+#ifdef APIS_DEBUG
+  Serial.print('R'); //Preceed range value
+  Serial.println(Range);
+#endif
+
+  Acquisition Result;
+  Result.Report = 0;
+  Result.Fault = false;
+  if(lidarInitFail) {
+    Result.Report = lidarInitFail;
+    Result.Fault = true;
+  }
+  else if(lidarFail) {
+    Result.Report = FAULT_LIDAR_TIMEOUT;
+    Result.Fault = true;
+  }
+  return Result;
+}
+
+Acquisition acquireLIS3DH() {
+  // Wait until both status registers report ready, or the timeout elapses. The
+  // timeout guards the whole condition (it used to guard only the second half,
+  // so a stuck Stat1 could wait forever). See Project-Apis #22.
+  uint8_t Stat1 = readByte(ACCEL_ADR, 0x27);
+  uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
+  unsigned long LocalTime = millis();
+  while((((Stat1 & 0x08) >> 3) != 1 || Stat2 != 0xFF) && (millis() - LocalTime) < timeoutGlobal) {
+    Stat1 = readByte(ACCEL_ADR, 0x27);
+    Stat2 = readByte(ACCEL_ADR, 0x07);
+    delay(1); //DEBUG!
+  }
+  accelFail = (millis() - LocalTime) >= timeoutGlobal; //Set flag if timeout occoured (was inverted; #22)
+  delay(5); //DEBUG!
+
+  getOffsets(); //Read in offsets
+  getG(true);
+
+  Acquisition Result;
+  Result.Report = 0;
+  Result.Fault = false;
+  if(accelFail) {
+    Result.Report = FAULT_ACCEL_NOACK;
+    Result.Fault = true;
+  }
+  return Result;
+}
+
+// Every chip a reading takes, in order. Fitting another chip to this board is a
+// line here and one more acquire function; the reading loop does not change.
+const Chip Chips[] = {
+  {CHIP_LIDAR, acquireLidarLiteV3HP},
+  {CHIP_ACCEL, acquireLIS3DH}
+};
+#define CHIP_COUNT (sizeof(Chips) / sizeof(Chips[0]))
+
 void loop() {
   // static unsigned int Count = 0; //Counter to determine update rate
   // if(startReading == true) {
@@ -361,8 +458,7 @@ void loop() {
   lidarConfig = reg[REG_CONFIG] & 0x03; //Pull low two bits from Config (0x46) to get Lidar configuration state
   // A reading begins: clear ready, take the chip selection, consume the trigger.
   reg[REG_STATUS] &= ~BIT_READY;
-  bool doLidar = reg[REG_CTRL] & CHIP_LIDAR;
-  bool doAccel = reg[REG_CTRL] & CHIP_ACCEL;
+  uint8_t selected = reg[REG_CTRL]; // Taken once: a controller write partway through must not change what this reading holds
   reg[REG_CTRL] &= ~(BIT_TRIGGER | BIT_SLEEP); // trigger consumed; sleep not implemented
   if(requestWritten) { // a new readings-requested word: count from this reading
     requestWritten = false;
@@ -370,54 +466,18 @@ void loop() {
     requestBase = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
     lidarInitFail = 0; // a new batch gets a fresh power-up attempt
   }
-  // A power-up that failed earlier in this batch is not retried on every trigger:
-  // the remaining readings report the fault at once (a batch on a dead LiDAR
-  // then costs ~10 ms per reading instead of ~440 ms). Single readings retry.
-  if(doLidar && !lidarOn && !lidarInitFail) lidarPowerUp();
-  if(lidarOn && lidarConfig != lidarConfigApplied) { initLiDAR(); lidarConfigApplied = lidarConfig; } // Config changed mid-batch
-  uint8_t Stat1 = readByte(ACCEL_ADR, 0x27); 
-  uint8_t Stat2 = readByte(ACCEL_ADR, 0x07);
-  // while(((Stat1 & 0x08) >> 3) != 1 || ((Stat2 & 0x08) >> 3) != 1 || ((Stat2 & 0x80) >> 7) != 1) {
-  unsigned long LocalTime = millis();
-  // Wait until both status registers report ready, or the timeout elapses.
-  // The timeout guards the whole condition (it used to guard only the second
-  // half, so a stuck Stat1 could wait forever). See Project-Apis #22.
-  while((((Stat1 & 0x08) >> 3) != 1 || Stat2 != 0xFF) && (millis() - LocalTime) < timeoutGlobal) {  //Try to get status from 
-    Stat1 = readByte(ACCEL_ADR, 0x27);
-    Stat2 = readByte(ACCEL_ADR, 0x07);
-    delay(1); //DEBUG!
+  // Each chip Control selects, in turn, and whatever its acquisition reports.
+  // A fault marks the chip in Status; a notice does not.
+  uint8_t status = BIT_READY;
+  for(uint8_t chip = 0; chip < CHIP_COUNT; chip++) {
+    if((selected & Chips[chip].Bit) == 0) continue; // Not selected in Control
+    Acquisition Result = Chips[chip].Acquire();
+    if(Result.Report) reg[REG_REPORT] = Result.Report;
+    if(Result.Fault) status |= Chips[chip].Bit;
   }
-  accelFail = (millis() - LocalTime) >= timeoutGlobal; //Set flag if timeout occoured (was inverted; #22)
-
-  // si.i2c_read(false);
-  // si.i2c_read(false);
-  // si.i2c_read(false); //DEBUG!
-  // si.i2c_read(false);
-  // si.i2c_read(false);
-  delay(5); //DEBUG!
-  // while(((readByte(ACCEL_ADR, 0x27) & 0x08) >> 3) != 1 || (digitalRead(7) == LOW)); //Wait for updated values
-
-  // Serial.println("START"); //DEBUG!
-  // Serial.println(Stat1, BIN); //DEBUG! 
-  // Serial.println(Stat2, BIN); //DEBUG!
-  // Serial.print("\n\n"); //Newline return
-
-  int16_t Range = -9999;
-  if(doLidar && lidarOn) Range = getRange();  //DEBUG! Replace!
-  if(doLidar && !lidarOn) { splitAndLoad(REG_RANGE, -9999); reg[REG_SIGNAL] = 0; } // power-up failed
-#ifdef APIS_DEBUG
-  Serial.print('R'); //Preceed range value
-  Serial.println(Range); 
-#endif
-  getOffsets(); //Read in offsets
-  if (doAccel) getG(true);
 
   // Reading complete: load status and fault, bump the counter, set ready.
   // Atomic so a controller's page read never straddles the update.
-  uint8_t status = BIT_READY;
-  if(doLidar && lidarInitFail) { status |= 0x02; reg[REG_REPORT] = lidarInitFail; }
-  else if(doLidar && lidarFail) { status |= 0x02; reg[REG_REPORT] = FAULT_LIDAR_TIMEOUT; }
-  if (doAccel && accelFail) { status |= 0x04; reg[REG_REPORT] = FAULT_ACCEL_NOACK; }
   if (status & 0x7E) status |= BIT_PANFAULT;
   uint16_t count = reg[REG_COUNTER] | (reg[REG_COUNTER + 1] << 8);
   count++;
